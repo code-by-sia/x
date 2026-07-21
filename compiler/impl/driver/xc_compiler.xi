@@ -1,5 +1,5 @@
 class XcCompiler implements Compiler {
-    deps { lexer: Lexer, parser: Parser, codegen: Codegen, host: Host, diag: Diagnostics, text: Text, arrays: TokenArrays, loader: ModuleLoader }
+    deps { lexer: Lexer, parser: Parser, codegen: Codegen, native: NativeBackend, host: Host, diag: Diagnostics, text: Text, arrays: TokenArrays, loader: ModuleLoader }
 
     // Progress output is opt-in: a successful build says nothing, so `xc` is
     // quiet in scripts and only failures reach the terminal. `--verbose` (or
@@ -43,18 +43,29 @@ class XcCompiler implements Compiler {
         checkMachines(prog)              // static machine-graph validation
         checkPurity(prog)                // pure-kind functions stay side-effect-free
 
-        vlog("xc: generating C ...")
-        let cSource = codegen.generate(prog, srcPath)
-
         let outDir = host.env("XC_OUT", "build")
         host.exec("mkdir -p '" + outDir + "'")
         // Binary name: the module's `id` if it declares one, else the basename.
         let base = baseName(srcPath)
         let mid = moduleId(prog)
         if text.len(mid) > 0 { base = mid }
+        let binPath = outDir + "/" + base
+
+        // Native backend: Program straight to an executable, no C toolchain.
+        // The C path below stays the default; --backend native opts in.
+        if host.env("XC_BACKEND", "c") == "native" {
+            vlog("xc: native backend -> " + binPath + " ...")
+            if native.emit(prog, srcPath, binPath) == 0 {
+                vlog("xc: built executable " + binPath)
+                return 0
+            }
+            return 1
+        }
+
+        vlog("xc: generating C ...")
+        let cSource = codegen.generate(prog, srcPath)
         let outPath = outDir + "/" + base + ".gen.c"
         host.writeFile(outPath, cSource)
-        let binPath = outDir + "/" + base
 
         vlog("xc: compiling C to native binary ...")
         let rc = host.compileC(outPath, binPath)
@@ -120,7 +131,7 @@ class XcCompiler implements Compiler {
     // CLI dispatch — the body that `entry main` used to run directly.
     producer run(args: String[]) -> Integer {
         if args.len < 2 {
-            system.stdout.writeln("Usage: xc <source.xi> [more.xi ...]   (or: xc --all, xc --target wasm <source.xi>, xc --verbose <source.xi>, xc version)")
+            system.stdout.writeln("Usage: xc <source.xi> [more.xi ...]   (or: xc --all, xc --target wasm <source.xi>, xc --backend native <source.xi>, xc --verbose <source.xi>, xc version)")
             return 1
         }
         if argHas(args, "--verbose") { host.setEnv("XC_VERBOSE", "1") }
@@ -131,6 +142,16 @@ class XcCompiler implements Compiler {
                 return 1
             }
             host.setEnv("XC_TARGET", tgt)
+        }
+        // --backend selects how code is produced: `c` (emit C, run cc; default)
+        // or `native` (emit machine code + write the executable directly).
+        let bk = argBackend(args)
+        if text.len(bk) > 0 {
+            if bk != "c" and bk != "native" {
+                system.stderr.writeln("xc: unknown --backend '" + bk + "' (expected: c, native)")
+                return 1
+            }
+            host.setEnv("XC_BACKEND", bk)
         }
         let srcPath = cliSource(args)
         if srcPath == "version" or srcPath == "--version" or srcPath == "-v" {

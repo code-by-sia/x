@@ -358,3 +358,127 @@ xc_integer_t compile_c(xc_string_t cpath, xc_string_t binpath) {
     if (rc == -1) return 1;
     return (xc_integer_t)(rc == 0 ? 0 : 1);
 }
+
+/* ============================================================================
+ * Native backend primitives (used by impl/backend/*.xi via extern "C").
+ *
+ * These are compiled into `xc` itself, never into a user's output binary — the
+ * native backend uses them to emit machine code and assemble a signed Mach-O
+ * with no cc/ld. Provided here (not in the runtime) because only the compiler
+ * builds executables:
+ *   - a growable byte buffer, addressed by an integer handle;
+ *   - a self-contained SHA-256 (for the ad-hoc code-signature slot hashes);
+ *   - an executable file write (bytes + chmod +x).
+ * Integer[]: appendInt mirrors appendString for building instruction words.
+ * ==========================================================================*/
+#include <sys/stat.h>
+#include <stdint.h>
+
+DEFINE_TYPED_ARR(xc_integer_t, xc_arr_integer_t, appendInt)
+
+/* Heap append for the XIR value types, so arrays that escape a function (the
+ * lowered module returned to the backend) survive — array *literals* get
+ * block-scoped backing storage and must not be returned. Same pattern the
+ * parser uses for its spec arrays. */
+DEFINE_TYPED_ARR(xc_XInsn_t,       xc_arr_XInsn_t,       appendXInsn)
+DEFINE_TYPED_ARR(xc_XBlock_t,      xc_arr_XBlock_t,      appendXBlock)
+DEFINE_TYPED_ARR(xc_XFunc_t,       xc_arr_XFunc_t,       appendXFunc)
+DEFINE_TYPED_ARR(xc_EncodedFunc_t, xc_arr_EncodedFunc_t, appendEncodedFunc)
+
+/* -- compact SHA-256 -- */
+typedef struct { uint32_t s[8]; uint64_t n; unsigned char b[64]; size_t bl; } xcsha_t;
+static uint32_t xcsha_ror(uint32_t x, int r) { return (x >> r) | (x << (32 - r)); }
+static void xcsha_block(xcsha_t* c, const unsigned char* p) {
+    static const uint32_t K[64] = {
+        0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+        0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+        0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+        0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+        0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+        0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+        0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+        0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2 };
+    uint32_t w[64];
+    for (int i = 0; i < 16; i++)
+        w[i] = ((uint32_t)p[i*4] << 24) | ((uint32_t)p[i*4+1] << 16) | ((uint32_t)p[i*4+2] << 8) | p[i*4+3];
+    for (int i = 16; i < 64; i++) {
+        uint32_t s0 = xcsha_ror(w[i-15],7) ^ xcsha_ror(w[i-15],18) ^ (w[i-15] >> 3);
+        uint32_t s1 = xcsha_ror(w[i-2],17) ^ xcsha_ror(w[i-2],19) ^ (w[i-2] >> 10);
+        w[i] = w[i-16] + s0 + w[i-7] + s1;
+    }
+    uint32_t a=c->s[0],b=c->s[1],cc=c->s[2],d=c->s[3],e=c->s[4],f=c->s[5],g=c->s[6],h=c->s[7];
+    for (int i = 0; i < 64; i++) {
+        uint32_t S1 = xcsha_ror(e,6) ^ xcsha_ror(e,11) ^ xcsha_ror(e,25);
+        uint32_t ch = (e & f) ^ ((~e) & g);
+        uint32_t t1 = h + S1 + ch + K[i] + w[i];
+        uint32_t S0 = xcsha_ror(a,2) ^ xcsha_ror(a,13) ^ xcsha_ror(a,22);
+        uint32_t maj = (a & b) ^ (a & cc) ^ (b & cc);
+        uint32_t t2 = S0 + maj;
+        h=g; g=f; f=e; e=d+t1; d=cc; cc=b; b=a; a=t1+t2;
+    }
+    c->s[0]+=a; c->s[1]+=b; c->s[2]+=cc; c->s[3]+=d; c->s[4]+=e; c->s[5]+=f; c->s[6]+=g; c->s[7]+=h;
+}
+static void xcsha_init(xcsha_t* c) {
+    c->s[0]=0x6a09e667; c->s[1]=0xbb67ae85; c->s[2]=0x3c6ef372; c->s[3]=0xa54ff53a;
+    c->s[4]=0x510e527f; c->s[5]=0x9b05688c; c->s[6]=0x1f83d9ab; c->s[7]=0x5be0cd19;
+    c->n=0; c->bl=0;
+}
+static void xcsha_update(xcsha_t* c, const unsigned char* p, size_t n) {
+    c->n += n;
+    while (n) { size_t k = 64 - c->bl; if (k > n) k = n;
+        memcpy(c->b + c->bl, p, k); c->bl += k; p += k; n -= k;
+        if (c->bl == 64) { xcsha_block(c, c->b); c->bl = 0; } }
+}
+static void xcsha_final(xcsha_t* c, unsigned char* out) {
+    uint64_t bits = c->n * 8;                 /* capture length before padding */
+    unsigned char pad = 0x80; xcsha_update(c, &pad, 1);
+    unsigned char z = 0; while (c->bl != 56) xcsha_update(c, &z, 1);
+    unsigned char L[8]; for (int i = 0; i < 8; i++) L[i] = (unsigned char)(bits >> (56 - 8*i));
+    xcsha_update(c, L, 8);
+    for (int i = 0; i < 8; i++) {
+        out[i*4]   = (unsigned char)(c->s[i] >> 24); out[i*4+1] = (unsigned char)(c->s[i] >> 16);
+        out[i*4+2] = (unsigned char)(c->s[i] >> 8);  out[i*4+3] = (unsigned char)(c->s[i]);
+    }
+}
+
+/* -- growable byte buffer, addressed by handle -- */
+#define XCB_MAX 16
+static unsigned char* xcb_p[XCB_MAX];
+static size_t xcb_l[XCB_MAX], xcb_c[XCB_MAX];
+static int xcb_count = 0;
+static void xcb_grow(int h, size_t extra) {
+    if (xcb_l[h] + extra > xcb_c[h]) {
+        size_t nc = xcb_c[h] ? xcb_c[h] : 256;
+        while (nc < xcb_l[h] + extra) nc *= 2;
+        xcb_p[h] = (unsigned char*)realloc(xcb_p[h], nc);
+        xcb_c[h] = nc;
+    }
+}
+xc_integer_t xcb_new(void) {
+    int h = xcb_count++;
+    xcb_p[h] = NULL; xcb_l[h] = 0; xcb_c[h] = 0;
+    return (xc_integer_t)h;
+}
+void xcb_u8(xc_integer_t h, xc_integer_t v) { xcb_grow((int)h, 1); xcb_p[h][xcb_l[h]++] = (unsigned char)(v & 0xff); }
+void xcb_u32(xc_integer_t h, xc_integer_t v)   { for (int i = 0; i < 4; i++) xcb_u8(h, (v >> (8*i)) & 0xff); }
+void xcb_u64(xc_integer_t h, xc_integer_t v)   { for (int i = 0; i < 8; i++) xcb_u8(h, (v >> (8*i)) & 0xff); }
+void xcb_u32be(xc_integer_t h, xc_integer_t v) { for (int i = 3; i >= 0; i--) xcb_u8(h, (v >> (8*i)) & 0xff); }
+void xcb_u64be(xc_integer_t h, xc_integer_t v) { for (int i = 7; i >= 0; i--) xcb_u8(h, (v >> (8*i)) & 0xff); }
+void xcb_zeros(xc_integer_t h, xc_integer_t n) { for (xc_integer_t i = 0; i < n; i++) xcb_u8(h, 0); }
+void xcb_ascii(xc_integer_t h, xc_string_t s)  { for (size_t i = 0; i < s.len; i++) xcb_u8(h, (unsigned char)s.data[i]); }
+xc_integer_t xcb_len(xc_integer_t h) { return (xc_integer_t)xcb_l[h]; }
+void xcb_sha256_append(xc_integer_t h, xc_integer_t from, xc_integer_t to) {
+    xcsha_t c; xcsha_init(&c); xcsha_update(&c, xcb_p[h] + from, (size_t)(to - from));
+    unsigned char d[32]; xcsha_final(&c, d);
+    xcb_grow((int)h, 32); memcpy(xcb_p[h] + xcb_l[h], d, 32); xcb_l[h] += 32;
+}
+xc_integer_t xcb_write_exec(xc_integer_t h, xc_string_t path) {
+    char* p = xc_string_to_cstr(path);
+    FILE* f = fopen(p, "wb");
+    if (!f) { free(p); return 1; }
+    fwrite(xcb_p[h], 1, xcb_l[h], f);
+    fclose(f);
+    chmod(p, 0755);
+    free(p);
+    return 0;
+}

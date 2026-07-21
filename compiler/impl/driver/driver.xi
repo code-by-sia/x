@@ -549,6 +549,18 @@ mapper argTarget(args: String[]) -> String {
     return ""
 }
 
+// The value of a `--backend <b>` / `--backend=<b>` flag anywhere in args, or "".
+mapper argBackend(args: String[]) -> String {
+    let i = 1
+    while i < args.len {
+        let a = args.data[i]
+        if a == "--backend" and i + 1 < args.len { return args.data[i + 1] }
+        if a.startsWith2("--backend=") { return string_slice(a, 10, string_len(a)) }
+        i = i + 1
+    }
+    return ""
+}
+
 // Is a bare flag present anywhere in the argument list?
 predicate argHas(args: String[], flag: String) {
     let i = 1
@@ -567,10 +579,10 @@ mapper cliSources(args: String[]) -> String[] {
     let i = 1
     while i < args.len {
         let a = args.data[i]
-        if a == "--target" {
+        if a == "--target" or a == "--backend" {
             i = i + 2
         } else {
-            if a.startsWith2("--target=") or a == "--verbose" {
+            if a.startsWith2("--target=") or a.startsWith2("--backend=") or a == "--verbose" {
                 i = i + 1
             } else {
                 out = appendString(out, a)

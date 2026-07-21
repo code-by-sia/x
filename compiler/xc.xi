@@ -25,6 +25,7 @@ import "contracts/lexer.xi"
 import "contracts/parser.xi"
 import "contracts/codegen.xi"
 import "contracts/codecs.xi"
+import "contracts/backend.xi"
 import "contracts/compiler.xi"
 import "contracts/module_loader.xi"
 
@@ -77,6 +78,16 @@ import "impl/codegen/codecs.xi"
 import "impl/codegen/top.xi"
 import "impl/codegen/xi_codegen.xi"
 
+// ── implementation layer: native backend (Program -> machine code) ─
+// The alternative to the C backend, selected by `xc --backend native`. Design
+// scaffolding: the IR and the ISA / object-format seams, with stub encoders that
+// report "not yet implemented" so the default C path never regresses.
+import "impl/backend/backend_ffi.xi"
+import "impl/backend/xir.xi"
+import "impl/backend/encoder.xi"
+import "impl/backend/objwriter.xi"
+import "impl/backend/native_backend.xi"
+
 // ── implementation layer: driver + composition root ───────────────
 import "impl/driver/driver.xi"
 import "impl/driver/module_loader.xi"
@@ -107,6 +118,9 @@ module Compile {
     bind Parser       -> XiParser       as singleton
     bind Codecs       -> JsonCodecs     as singleton
     bind Codegen      -> XiCodegen      as singleton
+    bind InsnEncoder  -> Arm64Encoder   as singleton
+    bind ObjectWriter -> MachoWriter    as singleton
+    bind NativeBackend -> XiNativeBackend as singleton
     bind ModuleLoader -> XiModuleLoader as singleton
     bind Compiler     -> XcCompiler     as singleton
 
