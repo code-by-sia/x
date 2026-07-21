@@ -17,16 +17,28 @@ unset XC_HELPERS                       # compiler-only; must not leak into user 
 W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
 fail=0
 
-for v in 0 1 42 99 200; do
-    printf 'module M { id = "e%s"\n entry main(args: String[]) -> Integer { return %s } }\n' "$v" "$v" > "$W/e$v.xi"
-    XC_OUT="$W" "$XC" --backend native "$W/e$v.xi" >/dev/null 2>&1
-    "$W/e$v"; got=$?
-    if [ "$got" -ne "$v" ]; then echo "  ✗ return $v -> exit $got"; fail=1; continue; fi
-    if [ "$(uname)" = "Darwin" ] && ! codesign -v "$W/e$v" >/dev/null 2>&1; then
-        echo "  ✗ return $v -> exit ok but signature invalid"; fail=1; continue
+# Integer-return expressions: literals and arithmetic (+ - * and parentheses),
+# checked against the expected exit code and (on macOS) a valid signature.
+n=0
+smoke() {  # $1 = expression, $2 = expected exit code
+    n=$((n+1))
+    printf 'module M { id = "e%s"\n entry main(args: String[]) -> Integer { return %s } }\n' "$n" "$1" > "$W/e$n.xi"
+    XC_OUT="$W" "$XC" --backend native "$W/e$n.xi" >/dev/null 2>&1
+    "$W/e$n"; got=$?
+    if [ "$got" -ne "$2" ]; then echo "  ✗ '$1' -> exit $got (want $2)"; fail=1; return; fi
+    if [ "$(uname)" = "Darwin" ] && ! codesign -v "$W/e$n" >/dev/null 2>&1; then
+        echo "  ✗ '$1' -> exit ok but signature invalid"; fail=1; return
     fi
-    echo "  ✓ return $v -> exit $got, signed"
-done
+    echo "  ✓ '$1' -> exit $got, signed"
+}
+smoke "0" 0
+smoke "42" 42
+smoke "200" 200
+smoke "6 * 7" 42
+smoke "2 + 3 * 4" 14
+smoke "(2 + 3) * 4" 20
+smoke "100 - 58" 42
+smoke "1000 * 1000" 64      # 1000000 mod 256, exercises wraparound
 
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"

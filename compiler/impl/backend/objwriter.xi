@@ -68,6 +68,8 @@ class MachoWriter implements ObjectWriter {
         // The single entry function's code words (milestone: one function).
         let code: Integer[] = []
         for f in m.funcs { code = f.code }
+        let codeBytes = 0
+        for w in code { codeBytes = codeBytes + 4 }
 
         let vmbase = 4294967296                // 0x100000000
         let sizeofcmds = 592                   // fixed for the 12 load commands below
@@ -110,7 +112,7 @@ class MachoWriter implements ObjectWriter {
         // ── load commands ──
         emitSeg(b, "__PAGEZERO", 72, 0, vmbase, 0, 0, 0, 0, 0, 0)
         emitSeg(b, "__TEXT", 152, vmbase, textFilesize, 0, textFilesize, 5, 5, 1, 0)
-        emitSect(b, "__text", "__TEXT", vmbase + codeOff, 8, codeOff, 2, 2147484672)  // S_ATTR_PURE/SOME_INSTRUCTIONS
+        emitSect(b, "__text", "__TEXT", vmbase + codeOff, codeBytes, codeOff, 2, 2147484672)  // S_ATTR_PURE/SOME_INSTRUCTIONS
         emitSeg(b, "__LINKEDIT", 72, vmbase + linkeditOff, linkeditVmsize, linkeditOff, linkeditFilesize, 1, 1, 0, 0)
 
         xcb_u32(b, 2147483700)     // LC_DYLD_CHAINED_FIXUPS (0x80000034)

@@ -98,11 +98,11 @@ $ ./build/exit_code ; echo $?
 42
 ```
 
-This backend is being built in stages and currently compiles a single program
-shape (an integer-literal return); anything else is reported and refused rather
-than mis-compiled. The C backend stays the default. See
-[Native backend](native-backend.md) for scope, the toolchain-free design, and
-the roadmap.
+This backend is being built in stages and currently compiles a return of an
+integer expression (literals with `+`, `-`, `*`, and parentheses); anything else
+is reported and refused rather than mis-compiled. The C backend stays the
+default. See [Native backend](native-backend.md) for scope, the toolchain-free
+design, and the roadmap.
 
 ### Dependencies - `xi install`
 
