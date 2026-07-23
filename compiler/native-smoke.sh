@@ -79,6 +79,12 @@ module M { entry main(args: String[]) -> Integer { return fact(5) } }' 120
 call 'mapper add(a: Integer, b: Integer) -> Integer { return a + b }
 module M { entry main(args: String[]) -> Integer { return add(add(10, 20), 12) } }' 42
 
+# External call via a dyld import (native-only: libc putchar), checked by output.
+printf 'extern "C" { producer putchar(c: Integer) -> Integer }\nmodule M { entry main(args: String[]) -> Integer { putchar(79)  putchar(75)  putchar(10)  return 0 } }\n' > "$W/imp.xi"
+XC_OUT="$W" "$XC" --backend native "$W/imp.xi" >/dev/null 2>&1
+out=$("$W/imp" 2>/dev/null)
+if [ "$out" = "OK" ]; then echo "  ✓ import: putchar prints \"OK\""; else echo "  ✗ import: putchar printed \"$out\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1

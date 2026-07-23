@@ -265,7 +265,11 @@ mapper parseStmt(ps: PS) -> PS {
     if k == 221 { return parseReturn(ps) }
     if k == 222 { return parseIf(ps) }
     if k == 247 { return parseWhile(ps) }
-    if k == 1 { return parseAssign(ps) }
+    if k == 1 {
+        // IDENT '(' -> a call statement (result discarded); else an assignment.
+        if psKind(psAdvance(ps)) == 100 { return parseCall(psAdvance(ps), psText(ps)) }
+        return parseAssign(ps)
+    }
     return psFail(ps)
 }
 
@@ -374,12 +378,14 @@ class XiNativeBackend implements NativeBackend {
         let m = lo.module
         let efs: EncodedFunc[] = []
         for f in m.funcs { efs = appendEncodedFunc(efs, enc.encode(f)) }
-        let lk = linkModule(EncodedModule { funcs: efs, entry: m.entry })
+        let externNames: String[] = []
+        for e in prog.externs { externNames = appendString(externNames, e.name) }
+        let lk = linkModule(EncodedModule { funcs: efs, entry: m.entry }, externNames)
         if not lk.ok {
             diag.error(0, "native backend: unresolved call to " + lk.missing)
             return 1
         }
-        if obj.write(lk.words, lk.entryWord, binPath) { return 0 }
+        if obj.write(lk.words, lk.entryWord, lk.extSites, lk.extSyms, binPath) { return 0 }
         diag.error(0, "native backend: failed to write executable " + binPath)
         return 1
     }

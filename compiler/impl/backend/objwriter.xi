@@ -16,8 +16,21 @@
 interface ObjectWriter {
     mapper   formatName() -> String
     // Assemble the linked code (32-bit words) into an executable at binPath, with
-    // the entry at word offset `entryWord` within the text. True on success.
-    producer write(code: Integer[], entryWord: Integer, binPath: String) -> Bool
+    // the entry at word offset `entryWord`. `extSites`/`extSyms` are the external
+    // call sites and their C symbols, routed through import stubs. True on success.
+    producer write(code: Integer[], entryWord: Integer, extSites: Integer[], extSyms: String[], binPath: String) -> Bool
+}
+
+// Is `s` present in the string list? (A local `String[]` does not always resolve
+// the `.includes` extension method, so the backend uses this directly.)
+predicate strIn(arr: String[], s: String) {
+    let i = 0
+    let n = stringArrLen(arr)
+    while i < n {
+        if stringArrGet(arr, i) == s { return true }
+        i = i + 1
+    }
+    return false
 }
 
 // Emit a 16-byte, NUL-padded name field (segment / section names).
@@ -60,32 +73,92 @@ producer emitSect(b: Integer, sect: String, seg: String, addr: Integer, size: In
     xcb_u32(b, 0)             // reserved3
 }
 
+mapper importIndexOf(syms: String[], s: String) -> Integer {
+    let i = 0
+    let n = stringArrLen(syms)
+    while i < n {
+        if stringArrGet(syms, i) == s { return i }
+        i = i + 1
+    }
+    return 0
+}
+
 class MachoWriter implements ObjectWriter {
     deps {}
 
     mapper formatName() -> String => "mach-o"
 
-    producer write(code: Integer[], entryWord: Integer, binPath: String) -> Bool {
-        let codeBytes = 0
-        for w in code { codeBytes = codeBytes + 4 }
+    producer write(code0: Integer[], entryWord: Integer, extSites: Integer[], extSyms: String[], binPath: String) -> Bool {
+        // Distinct imported symbols (one __got slot + stub each).
+        let importSyms: String[] = []
+        let ei = 0
+        while ei < stringArrLen(extSyms) {
+            let s = stringArrGet(extSyms, ei)
+            if not strIn(importSyms, s) { importSyms = appendString(importSyms, s) }
+            ei = ei + 1
+        }
+        let nImports = stringArrLen(importSyms)
+        let hasImports = nImports > 0
 
-        let vmbase = 4294967296                // 0x100000000
-        let sizeofcmds = 592                   // fixed for the 12 load commands below
-        let codeOff = alignUp(32 + sizeofcmds, 4)   // 624
-        // __TEXT spans the header, load commands, and code, page-aligned (16 KB).
+        // Append one 3-instruction stub per import to the code.
+        let code = code0
+        let stubStart = intArrLen(code0)
+        let sc = 0
+        while sc < nImports * 3 { code = appendInt(code, 0)  sc = sc + 1 }
+        let codeBytes = intArrLen(code) * 4
+
+        let vmbase = 4294967296
+        let ncmds = 12
+        let sizeofcmds = 592
+        if hasImports { ncmds = 13  sizeofcmds = 744 }   // + __DATA_CONST segment (72 + 80)
+        let codeOff = alignUp(32 + sizeofcmds, 4)
         let textFilesize = alignUp(codeOff + codeBytes, 16384)
         let entryoff = codeOff + entryWord * 4
-        let linkeditOff = textFilesize
 
-        // __LINKEDIT contents: chained-fixups blob, empty sym/str table, signature.
+        let dataOff = textFilesize
+        let gotVm = vmbase + dataOff
+        let dataFilesize = 16384
+        let linkeditOff = textFilesize
+        if hasImports { linkeditOff = textFilesize + 16384 }
+
+        // Encode stubs (adrp x16, got ; ldr x16,[x16] ; br x16) and route each
+        // external BL to its stub.
+        if hasImports {
+            let s = 0
+            while s < nImports {
+                let stubWord = stubStart + s * 3
+                let stubVm = vmbase + codeOff + stubWord * 4
+                let gotSlotVm = gotVm + s * 8
+                let stubPage = stubVm - (stubVm % 4096)
+                let gotPage = gotSlotVm - (gotSlotVm % 4096)
+                code = setInt(code, stubWord, aAdrp(16, (gotPage - stubPage) / 4096))
+                code = setInt(code, stubWord + 1, aLdr(16, 16, gotSlotVm % 4096))
+                code = setInt(code, stubWord + 2, 3592356352)   // br x16
+                s = s + 1
+            }
+            let k = 0
+            while k < intArrLen(extSites) {
+                let stubWord = stubStart + importIndexOf(importSyms, stringArrGet(extSyms, k)) * 3
+                let site = intArrGet(extSites, k)
+                code = setInt(code, site, aBl(stubWord - site))
+                k = k + 1
+            }
+        }
+
+        // __LINKEDIT: chained fixups (with imports), empty sym/str table, signature.
         let cfLen = 48
+        if hasImports {
+            let symLen = 1
+            let m = 0
+            while m < nImports { symLen = symLen + string_len(stringArrGet(importSyms, m)) + 1  m = m + 1 }
+            cfLen = alignUp(28 + (4 + 4 * 4 + 24) + nImports * 4 + symLen, 8)
+        }
         let symoff = linkeditOff + cfLen
         let strsize = 8
         let codesigOff = alignUp(symoff + strsize, 16)
         let codeLimit = codesigOff
         let nCode = (codeLimit + 4095) / 4096
 
-        // CodeDirectory sizing.
         let ident = baseName(binPath)
         let identLen = string_len(ident) + 1
         let cdHeaderLen = 88
@@ -99,95 +172,155 @@ class MachoWriter implements ObjectWriter {
         let b = xcb_new()
 
         // ── mach_header_64 ──
-        xcb_u32(b, 4277009103)     // MH_MAGIC_64 (0xFEEDFACF)
-        xcb_u32(b, 16777228)       // CPU_TYPE_ARM64 (0x0100000C)
-        xcb_u32(b, 0)              // cpusubtype
+        xcb_u32(b, 4277009103)     // MH_MAGIC_64
+        xcb_u32(b, 16777228)       // CPU_TYPE_ARM64
+        xcb_u32(b, 0)
         xcb_u32(b, 2)              // MH_EXECUTE
-        xcb_u32(b, 12)             // ncmds
+        xcb_u32(b, ncmds)
         xcb_u32(b, sizeofcmds)
-        xcb_u32(b, 2097285)        // NOUNDEFS|DYLDLINK|TWOLEVEL|PIE (0x00200085)
-        xcb_u32(b, 0)              // reserved
+        xcb_u32(b, 2097285)        // NOUNDEFS|DYLDLINK|TWOLEVEL|PIE
+        xcb_u32(b, 0)
 
         // ── load commands ──
         emitSeg(b, "__PAGEZERO", 72, 0, vmbase, 0, 0, 0, 0, 0, 0)
         emitSeg(b, "__TEXT", 152, vmbase, textFilesize, 0, textFilesize, 5, 5, 1, 0)
-        emitSect(b, "__text", "__TEXT", vmbase + codeOff, codeBytes, codeOff, 2, 2147484672)  // S_ATTR_PURE/SOME_INSTRUCTIONS
+        emitSect(b, "__text", "__TEXT", vmbase + codeOff, codeBytes, codeOff, 2, 2147484672)
+        if hasImports {
+            emitSeg(b, "__DATA_CONST", 152, gotVm, dataFilesize, dataOff, dataFilesize, 3, 3, 1, 16)  // SG_READ_ONLY
+            emitSect(b, "__got", "__DATA_CONST", gotVm, nImports * 8, dataOff, 3, 6)                    // S_NON_LAZY_SYMBOL_POINTERS
+        }
         emitSeg(b, "__LINKEDIT", 72, vmbase + linkeditOff, linkeditVmsize, linkeditOff, linkeditFilesize, 1, 1, 0, 0)
 
-        xcb_u32(b, 2147483700)     // LC_DYLD_CHAINED_FIXUPS (0x80000034)
+        xcb_u32(b, 2147483700)     // LC_DYLD_CHAINED_FIXUPS
         xcb_u32(b, 16)
-        xcb_u32(b, linkeditOff)    // dataoff
-        xcb_u32(b, cfLen)          // datasize
+        xcb_u32(b, linkeditOff)
+        xcb_u32(b, cfLen)
 
         xcb_u32(b, 2)              // LC_SYMTAB
         xcb_u32(b, 24)
         xcb_u32(b, symoff)
-        xcb_u32(b, 0)              // nsyms
-        xcb_u32(b, symoff)         // stroff
+        xcb_u32(b, 0)
+        xcb_u32(b, symoff)
         xcb_u32(b, strsize)
 
         xcb_u32(b, 11)             // LC_DYSYMTAB
         xcb_u32(b, 80)
-        xcb_zeros(b, 72)           // all index/count fields zero
+        xcb_zeros(b, 72)
 
         xcb_u32(b, 14)             // LC_LOAD_DYLINKER
         xcb_u32(b, 32)
-        xcb_u32(b, 12)             // name offset
+        xcb_u32(b, 12)
         xcb_ascii(b, "/usr/lib/dyld")
         xcb_u8(b, 0)
-        xcb_zeros(b, 6)            // pad 26 -> 32
+        xcb_zeros(b, 6)
 
         xcb_u32(b, 12)             // LC_LOAD_DYLIB
         xcb_u32(b, 56)
-        xcb_u32(b, 24)             // name offset
-        xcb_u32(b, 2)              // timestamp
-        xcb_u32(b, 89063424)       // current version 1359.0.0 (1359<<16)
-        xcb_u32(b, 65536)          // compatibility 1.0.0 (1<<16)
+        xcb_u32(b, 24)
+        xcb_u32(b, 2)
+        xcb_u32(b, 89063424)
+        xcb_u32(b, 65536)
         xcb_ascii(b, "/usr/lib/libSystem.B.dylib")
         xcb_u8(b, 0)
-        xcb_zeros(b, 5)            // pad 51 -> 56
+        xcb_zeros(b, 5)
 
         xcb_u32(b, 50)             // LC_BUILD_VERSION
         xcb_u32(b, 24)
-        xcb_u32(b, 1)              // platform macOS
-        xcb_u32(b, 1769472)        // minos 27.0 (27<<16)
-        xcb_u32(b, 1769472)        // sdk 27.0
-        xcb_u32(b, 0)              // ntools
+        xcb_u32(b, 1)
+        xcb_u32(b, 1769472)
+        xcb_u32(b, 1769472)
+        xcb_u32(b, 0)
 
         xcb_u32(b, 27)             // LC_UUID
         xcb_u32(b, 24)
-        xcb_ascii(b, "XiNativeBackend")   // 15 bytes ...
-        xcb_u8(b, 0)                        // ... + NUL = 16
+        xcb_ascii(b, "XiNativeBackend")
+        xcb_u8(b, 0)
 
-        xcb_u32(b, 2147483688)     // LC_MAIN (0x80000028)
+        xcb_u32(b, 2147483688)     // LC_MAIN
         xcb_u32(b, 24)
         xcb_u64(b, entryoff)
-        xcb_u64(b, 0)              // stacksize
+        xcb_u64(b, 0)
 
         xcb_u32(b, 29)             // LC_CODE_SIGNATURE
         xcb_u32(b, 16)
         xcb_u32(b, codesigOff)
         xcb_u32(b, codesigSize)
 
-        // ── __TEXT body: pad to the entry, emit code, pad to __LINKEDIT ──
+        // ── __TEXT body ──
         xcb_zeros(b, codeOff - xcb_len(b))
         for w in code { xcb_u32(b, w) }
+
+        // ── __DATA_CONST: __got bind pointers ──
+        if hasImports {
+            xcb_zeros(b, dataOff - xcb_len(b))
+            let g = 0
+            while g < nImports {
+                let next = 0
+                if g < nImports - 1 { next = 2 }              // 8-byte stride = 2 (4-byte units)
+                xcb_u32(b, g)                                 // low32: import ordinal
+                xcb_u32(b, 2147483648 + next * 524288)        // high32: bind bit + next
+                g = g + 1
+            }
+        }
         xcb_zeros(b, linkeditOff - xcb_len(b))
 
-        // ── chained fixups: header + starts_in_image (3 segs, no fixups) + empty symbols ──
-        xcb_u32(b, 0)              // fixups_version
-        xcb_u32(b, 28)             // starts_offset
-        xcb_u32(b, 44)             // imports_offset
-        xcb_u32(b, 44)             // symbols_offset
-        xcb_u32(b, 0)              // imports_count
-        xcb_u32(b, 1)              // imports_format (DYLD_CHAINED_IMPORT)
-        xcb_u32(b, 0)              // symbols_format
-        xcb_u32(b, 3)              // seg_count
-        xcb_u32(b, 0)
-        xcb_u32(b, 0)
-        xcb_u32(b, 0)
-        xcb_u8(b, 0)              // empty symbol pool (leading NUL)
-        xcb_zeros(b, 3)           // pad 45 -> 48
+        // ── chained fixups ──
+        if hasImports {
+            let importsOff = 28 + (4 + 4 * 4 + 24)
+            let symbolsOff = importsOff + nImports * 4
+            xcb_u32(b, 0)                 // version
+            xcb_u32(b, 28)                // starts_offset
+            xcb_u32(b, importsOff)
+            xcb_u32(b, symbolsOff)
+            xcb_u32(b, nImports)          // imports_count
+            xcb_u32(b, 1)                 // imports_format (DYLD_CHAINED_IMPORT)
+            xcb_u32(b, 0)                 // symbols_format
+            // starts_in_image: 4 segments, __DATA_CONST (index 2) has the fixups
+            xcb_u32(b, 4)
+            xcb_u32(b, 0)
+            xcb_u32(b, 0)
+            xcb_u32(b, 20)                // seg[2] offset (4 + 4*4)
+            xcb_u32(b, 0)
+            // starts_in_segment (__DATA_CONST)
+            xcb_u32(b, 24)                // size
+            xcb_u8(b, 0)  xcb_u8(b, 64)   // page_size 0x4000
+            xcb_u8(b, 6)  xcb_u8(b, 0)    // pointer_format 6 (PTR_64_OFFSET)
+            xcb_u64(b, dataOff)           // segment_offset
+            xcb_u32(b, 0)                 // max_valid_pointer
+            xcb_u8(b, 1)  xcb_u8(b, 0)    // page_count 1
+            xcb_u8(b, 0)  xcb_u8(b, 0)    // page_start[0] 0
+            // imports
+            let mm = 0
+            let nameOff = 1
+            while mm < nImports {
+                xcb_u32(b, 1 + nameOff * 512)   // lib_ordinal=1, name_off<<9
+                nameOff = nameOff + string_len(stringArrGet(importSyms, mm)) + 1
+                mm = mm + 1
+            }
+            // symbols pool
+            xcb_u8(b, 0)
+            let mn = 0
+            while mn < nImports {
+                xcb_ascii(b, stringArrGet(importSyms, mn))
+                xcb_u8(b, 0)
+                mn = mn + 1
+            }
+            xcb_zeros(b, (linkeditOff + cfLen) - xcb_len(b))
+        } else {
+            xcb_u32(b, 0)              // version
+            xcb_u32(b, 28)             // starts_offset
+            xcb_u32(b, 44)             // imports_offset
+            xcb_u32(b, 44)             // symbols_offset
+            xcb_u32(b, 0)              // imports_count
+            xcb_u32(b, 1)              // imports_format
+            xcb_u32(b, 0)              // symbols_format
+            xcb_u32(b, 3)              // seg_count
+            xcb_u32(b, 0)
+            xcb_u32(b, 0)
+            xcb_u32(b, 0)
+            xcb_u8(b, 0)
+            xcb_zeros(b, 3)
+        }
 
         // ── empty symbol + string table ──
         xcb_zeros(b, strsize)

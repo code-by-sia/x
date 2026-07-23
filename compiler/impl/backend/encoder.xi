@@ -12,7 +12,10 @@ type XReloc = { at: Integer, sym: String, kind: String, addend: Integer }
 type EncodedFunc = { name: String, code: Integer[], relocs: XReloc[] }
 type EncodedModule = { funcs: EncodedFunc[], entry: String }
 type EncResult = { words: Integer[], sites: Integer[], syms: String[] }
-type LinkedCode = { words: Integer[], entryWord: Integer, ok: Bool, missing: String }
+// The linked code plus the external call sites the writer must route through
+// import stubs: `extSites` are word indices of BL placeholders, `extSyms` the
+// matching C symbols (with the macOS leading underscore).
+type LinkedCode = { words: Integer[], entryWord: Integer, ok: Bool, missing: String, extSites: Integer[], extSyms: String[] }
 
 interface InsnEncoder {
     mapper   archName() -> String
@@ -48,6 +51,13 @@ mapper aCbz(rt: Integer, disp: Integer) -> Integer {
     if imm < 0 { imm = imm + 524288 }        // 2^19
     return 3019898880 + imm * 32 + rt
 }
+// adrp Xd, #imm21 (page-relative); ldr Xt,[Xn,#off]; br Xn — the import stub.
+mapper aAdrp(rd: Integer, imm21: Integer) -> Integer {
+    let lo = imm21 % 4
+    let hi = (imm21 / 4) % 524288
+    return 2415919104 + lo * 536870912 + hi * 32 + rd    // 0x90000000
+}
+mapper aLdr(rt: Integer, rn: Integer, off: Integer) -> Integer => 4181721088 + (off / 8) * 1024 + rn * 32 + rt
 
 mapper invCond(op: String) -> Integer {
     if op == "eq"  { return 1 }
@@ -201,9 +211,11 @@ mapper lookupOff(names: String[], offs: Integer[], name: String) -> Integer {
     return 0 - 1
 }
 
-// Concatenate the encoded functions, then patch every BL with the word
-// displacement to its callee. Returns the flat code and the entry's word offset.
-mapper linkModule(em: EncodedModule) -> LinkedCode {
+// Concatenate the encoded functions and patch each BL. Internal calls become a
+// direct BL to the callee; a call to a declared extern is recorded as an
+// external site (the writer routes it through an import stub); anything else is
+// an unresolved-symbol error.
+mapper linkModule(em: EncodedModule, externNames: String[]) -> LinkedCode {
     let allWords: Integer[] = []
     let fnames: String[] = []
     let foffs: Integer[] = []
@@ -212,20 +224,30 @@ mapper linkModule(em: EncodedModule) -> LinkedCode {
         foffs = appendInt(foffs, intArrLen(allWords))
         for w in f.code { allWords = appendInt(allWords, w) }
     }
+    let extSites: Integer[] = []
+    let extSyms: String[] = []
     let fi = 0
     for f in em.funcs {
         let base = intArrGet(foffs, fi)
         for r in f.relocs {
-            let callee = lookupOff(fnames, foffs, r.sym)
-            if callee < 0 { return LinkedCode { words: allWords, entryWord: 0, ok: false, missing: r.sym } }
             let site = base + r.at
-            allWords = setInt(allWords, site, aBl(callee - site))
+            let callee = lookupOff(fnames, foffs, r.sym)
+            if callee >= 0 {
+                allWords = setInt(allWords, site, aBl(callee - site))
+            } else {
+                if strIn(externNames, r.sym) {
+                    extSites = appendInt(extSites, site)
+                    extSyms = appendString(extSyms, "_" + r.sym)   // macOS C symbol
+                } else {
+                    return LinkedCode { words: allWords, entryWord: 0, ok: false, missing: r.sym, extSites: extSites, extSyms: extSyms }
+                }
+            }
         }
         fi = fi + 1
     }
     let entryWord = lookupOff(fnames, foffs, em.entry)
-    if entryWord < 0 { return LinkedCode { words: allWords, entryWord: 0, ok: false, missing: em.entry } }
-    return LinkedCode { words: allWords, entryWord: entryWord, ok: true, missing: "" }
+    if entryWord < 0 { return LinkedCode { words: allWords, entryWord: 0, ok: false, missing: em.entry, extSites: extSites, extSyms: extSyms } }
+    return LinkedCode { words: allWords, entryWord: entryWord, ok: true, missing: "", extSites: extSites, extSyms: extSyms }
 }
 
 // AArch64 (arm64) — the host architecture.

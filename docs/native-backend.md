@@ -25,6 +25,7 @@ The native backend is being built in stages behind the flag, with the C backend 
 - `let` bindings, assignment, and `return`;
 - `if` / `else` and `while`;
 - calls to other integer functions (including recursion and mutual recursion);
+- calls to declared `extern "C"` functions with integer arguments (bound from libSystem by dyld — see below);
 - expressions over integer literals, parameters, locals, `+ - * / %`, comparisons (`== != < <= > >=`), and parentheses.
 
 Locals and parameters get dedicated stack slots (stable across loop iterations); expression temps get fresh slots; branches are resolved in a second pass, and calls follow the AArch64 convention (args in `x0`..`x7`, result in `x0`, `fp`/`lr` saved). The backend lays the functions out and patches every `BL` itself. Anything outside the subset (a string, a non-integer function, an unsupported operator) is reported and refused rather than mis-compiled:
@@ -60,6 +61,7 @@ The purest form of a toolchain-free binary is a static Linux ELF that makes raw 
 | Integer arithmetic (`+ - * / %`, parentheses) with a stack frame | done |
 | Locals, comparisons, `if`/`else`, `while` | done |
 | Function calls (params, recursion, AArch64 convention) | done |
+| External calls via dyld imports (stubs, `__got`, chained fixups) | done |
 | Link the prebuilt runtime object | next |
 | Full language coverage, diffed against the C backend | planned |
 | Self-host: compile the compiler with the native backend | planned |
