@@ -20,13 +20,14 @@ The runtime is not rewritten for this. A prebuilt runtime object ships per platf
 
 ## Current scope
 
-The native backend is being built in stages behind the flag, with the C backend as the untouched default the whole way. Today it compiles an integer `entry main` body made of:
+The native backend is being built in stages behind the flag, with the C backend as the untouched default the whole way. Today it compiles integer functions: `main` plus any top-level function whose parameters and return are `Integer`. A body may use:
 
 - `let` bindings, assignment, and `return`;
 - `if` / `else` and `while`;
-- expressions over integer literals, locals, `+ - * / %`, comparisons (`== != < <= > >=`), and parentheses.
+- calls to other integer functions (including recursion and mutual recursion);
+- expressions over integer literals, parameters, locals, `+ - * / %`, comparisons (`== != < <= > >=`), and parentheses.
 
-Locals get dedicated stack slots (stable across loop iterations); expression temps get fresh slots; branches are resolved in a second pass. This exercises the whole path: parsing into the intermediate form, emitting real AArch64 with a stack frame, and assembling a complete, signed executable. Anything outside it (a call, a string, an unsupported operator) is reported and refused rather than mis-compiled:
+Locals and parameters get dedicated stack slots (stable across loop iterations); expression temps get fresh slots; branches are resolved in a second pass, and calls follow the AArch64 convention (args in `x0`..`x7`, result in `x0`, `fp`/`lr` saved). The backend lays the functions out and patches every `BL` itself. Anything outside the subset (a string, a non-integer function, an unsupported operator) is reported and refused rather than mis-compiled:
 
 ```
 xc: error: native backend: the native backend supports an integer entry body
@@ -58,8 +59,8 @@ The purest form of a toolchain-free binary is a static Linux ELF that makes raw 
 | `return <int>` compiles and runs, no cc/ld/codesign | done |
 | Integer arithmetic (`+ - * / %`, parentheses) with a stack frame | done |
 | Locals, comparisons, `if`/`else`, `while` | done |
-| Function calls | next |
-| Link the prebuilt runtime object | planned |
+| Function calls (params, recursion, AArch64 convention) | done |
+| Link the prebuilt runtime object | next |
 | Full language coverage, diffed against the C backend | planned |
 | Self-host: compile the compiler with the native backend | planned |
 | Second target (Linux ELF, x86-64) | planned |

@@ -14,6 +14,8 @@ extern "C" {
     mapper   appendXInsn(arr: XInsn[], v: XInsn) -> XInsn[]
     mapper   appendXBlock(arr: XBlock[], v: XBlock) -> XBlock[]
     mapper   appendXFunc(arr: XFunc[], v: XFunc) -> XFunc[]
+    mapper   appendXVal(arr: XVal[], v: XVal) -> XVal[]
+    mapper   appendXReloc(arr: XReloc[], v: XReloc) -> XReloc[]
     mapper   appendEncodedFunc(arr: EncodedFunc[], v: EncodedFunc) -> EncodedFunc[]
 
     producer xcb_new() -> Integer                       // fresh buffer handle

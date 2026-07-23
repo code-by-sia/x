@@ -98,10 +98,11 @@ $ ./build/exit_code ; echo $?
 42
 ```
 
-This backend is being built in stages and currently compiles an integer `main`
-body of `let`, assignment, `return`, `if`/`else`, and `while` over integer
-arithmetic and comparisons; anything else is reported and refused rather than
-mis-compiled. The C backend stays the default. See
+This backend is being built in stages and currently compiles integer functions
+(`main` plus integer-typed top-level functions) using `let`, assignment,
+`return`, `if`/`else`, `while`, calls, and integer arithmetic and comparisons;
+anything else is reported and refused rather than mis-compiled. The C backend
+stays the default. See
 [Native backend](native-backend.md) for scope, the toolchain-free design, and
 the roadmap.
 

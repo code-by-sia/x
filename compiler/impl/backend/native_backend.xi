@@ -86,14 +86,48 @@ mapper cmpOpOf(k: Integer) -> String {
     return ""
 }
 
-// primary := INT | IDENT | '(' expr ')'
+mapper slotsToVals(slots: Integer[]) -> XVal[] {
+    let out: XVal[] = []
+    let i = 0
+    let n = intArrLen(slots)
+    while i < n { out = appendXVal(out, xtemp(intArrGet(slots, i)))  i = i + 1 }
+    return out
+}
+mapper psEmitCall(ps: PS, callee: String, argSlots: Integer[], dst: Integer) -> PS {
+    return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_call(dst, callee, slotsToVals(argSlots), "i64")), nextSlot: dst + 1, resultTemp: dst, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet }
+}
+
+// call := IDENT '(' (expr (',' expr)*)? ')'   — ps is positioned at '('
+mapper parseCall(ps: PS, name: String) -> PS {
+    let cur = psAdvance(ps)                       // consume '('
+    let argSlots: Integer[] = []
+    if psKind(cur) != 101 {
+        cur = parseExpr(cur)
+        if not cur.ok { return cur }
+        argSlots = appendInt(argSlots, cur.resultTemp)
+        while psKind(cur) == 106 {                // ','
+            cur = parseExpr(psAdvance(cur))
+            if not cur.ok { return cur }
+            argSlots = appendInt(argSlots, cur.resultTemp)
+        }
+    }
+    if psKind(cur) != 101 { return psFail(cur) }  // ')'
+    if intArrLen(argSlots) > 8 { return psFail(cur) }
+    let p2 = psAdvance(cur)
+    return psEmitCall(p2, name, argSlots, p2.nextSlot)
+}
+
+// primary := INT | IDENT | call | '(' expr ')'
 mapper parsePrimary(ps: PS) -> PS {
     let k = psKind(ps)
     if k == 2 { return psEmitConst(psAdvance(ps), digitsToInt(psText(ps))) }
     if k == 1 {
-        let slot = lookupLocal(ps, psText(ps))
+        let name = psText(ps)
+        let p1 = psAdvance(ps)
+        if psKind(p1) == 100 { return parseCall(p1, name) }   // '(' -> call
+        let slot = lookupLocal(ps, name)
         if slot < 0 { return psFail(ps) }
-        return psResult(psAdvance(ps), slot)
+        return psResult(p1, slot)
     }
     if k == 100 {
         let inner = parseExpr(psAdvance(ps))
@@ -245,22 +279,86 @@ mapper parseStmts(ps: PS) -> PS {
 }
 
 mapper unsupportedLower() -> LowerResult {
-    return LowerResult { ok: false, module: emptyXModule(), reason: "the native backend supports an integer entry body of let, assignment, return, if/else and while over int literals, locals, + - *, comparisons and parentheses; the body must end in a return" }
+    return LowerResult { ok: false, module: emptyXModule(), reason: "the native backend supports integer functions of let, assignment, return, if/else, while and calls over int literals, params, locals, + - * / %, comparisons and parentheses; every function must return Integer and end in a return" }
 }
 
-mapper lowerProgram(prog: Program) -> LowerResult {
-    let toks = prog.entrySpec.bodyTokens
+type FuncLower = { ok: Bool, fn: XFunc }
+type ParamParse = { ok: Bool, names: String[] }
+
+mapper trimStr(s: String) -> String {
+    let n = string_len(s)
+    let a = 0
+    while a < n and string_char_at(s, a) == 32 { a = a + 1 }
+    let b = n
+    while b > a and string_char_at(s, b - 1) == 32 { b = b - 1 }
+    return string_slice(s, a, b)
+}
+
+// Parse a C parameter list "xc_integer_t a, xc_integer_t b" into names; not-ok if
+// any parameter is not an Integer (the only type the backend handles).
+mapper parseIntParams(pstr: String) -> ParamParse {
+    let names: String[] = []
+    if string_len(trimStr(pstr)) == 0 { return ParamParse { ok: true, names: names } }
+    let n = string_len(pstr)
+    let start = 0
+    let i = 0
+    while i <= n {
+        if i == n or string_char_at(pstr, i) == 44 {          // ',' or end
+            let piece = trimStr(string_slice(pstr, start, i))
+            if not piece.startsWith2("xc_integer_t ") { return ParamParse { ok: false, names: names } }
+            let name = trimStr(string_slice(piece, 13, string_len(piece)))
+            if string_len(name) == 0 { return ParamParse { ok: false, names: names } }
+            names = appendString(names, name)
+            start = i + 1
+        }
+        i = i + 1
+    }
+    return ParamParse { ok: true, names: names }
+}
+
+mapper dummyFn() -> XFunc {
+    let b0: XBlock[] = []
+    return XFunc { name: "", params: [], ret: "i64", blocks: b0, nTemps: 0, frame: 0 }
+}
+
+// Lower one function body. The entry ignores its params (called by the loader);
+// others bind params to the first slots and spill them in the prologue.
+mapper lowerFunc(name: String, paramStr: String, retC: String, bodyTokens: Token[], isEntry: Bool) -> FuncLower {
+    if retC != "xc_integer_t" { return FuncLower { ok: false, fn: dummyFn() } }
     let names0: String[] = []
     let slots0: Integer[] = []
+    let np = 0
+    if not isEntry {
+        let pp = parseIntParams(paramStr)
+        if not pp.ok { return FuncLower { ok: false, fn: dummyFn() } }
+        names0 = pp.names
+        np = stringArrLen(pp.names)
+        if np > 8 { return FuncLower { ok: false, fn: dummyFn() } }
+        let i = 0
+        while i < np { slots0 = appendInt(slots0, i)  i = i + 1 }
+    }
     let insns0: XInsn[] = []
-    let ps = parseStmts(PS { toks: toks, pos: 0, insns: insns0, nextSlot: 0, resultTemp: 0, ok: true, names: names0, slots: slots0, nextLabel: 0, lastRet: false })
-    if not ps.ok { return unsupportedLower() }
-    if not ps.lastRet { return unsupportedLower() }   // must end in a return
-
+    let ps = parseStmts(PS { toks: bodyTokens, pos: 0, insns: insns0, nextSlot: np, resultTemp: 0, ok: true, names: names0, slots: slots0, nextLabel: 0, lastRet: false })
+    if not ps.ok { return FuncLower { ok: false, fn: dummyFn() } }
+    if not ps.lastRet { return FuncLower { ok: false, fn: dummyFn() } }
     let blocks0: XBlock[] = []
     let blocks = appendXBlock(blocks0, XBlock { id: 0, insns: ps.insns })
+    return FuncLower { ok: true, fn: XFunc { name: name, params: names0, ret: "i64", blocks: blocks, nTemps: ps.nextSlot, frame: 0 } }
+}
+
+// Lower the whole program: main (the entry) plus every top-level function. Any
+// function outside the supported subset refuses the native build.
+mapper lowerProgram(prog: Program) -> LowerResult {
     let funcs0: XFunc[] = []
-    let funcs = appendXFunc(funcs0, XFunc { name: "main", params: [], ret: "i64", blocks: blocks, nTemps: ps.nextSlot, frame: 0 })
+    let funcs = funcs0
+    let lm = lowerFunc("main", "", prog.entrySpec.retCtype, prog.entrySpec.bodyTokens, true)
+    if not lm.ok { return unsupportedLower() }
+    funcs = appendXFunc(funcs, lm.fn)
+    for f in prog.functions {
+        let lf = lowerFunc(f.name, f.params, f.retCtype, f.bodyTokens, false)
+        if not lf.ok { return unsupportedLower() }
+        funcs = appendXFunc(funcs, lf.fn)
+    }
     return LowerResult { ok: true, module: XModule { funcs: funcs, externs: [], entry: "main" }, reason: "" }
 }
 
@@ -276,8 +374,12 @@ class XiNativeBackend implements NativeBackend {
         let m = lo.module
         let efs: EncodedFunc[] = []
         for f in m.funcs { efs = appendEncodedFunc(efs, enc.encode(f)) }
-        let em = EncodedModule { funcs: efs, entry: m.entry }
-        if obj.write(em, binPath) { return 0 }
+        let lk = linkModule(EncodedModule { funcs: efs, entry: m.entry })
+        if not lk.ok {
+            diag.error(0, "native backend: unresolved call to " + lk.missing)
+            return 1
+        }
+        if obj.write(lk.words, lk.entryWord, binPath) { return 0 }
         diag.error(0, "native backend: failed to write executable " + binPath)
         return 1
     }

@@ -391,6 +391,8 @@ xc_arr_integer_t setInt(xc_arr_integer_t a, xc_integer_t i, xc_integer_t v) { a.
 DEFINE_TYPED_ARR(xc_XInsn_t,       xc_arr_XInsn_t,       appendXInsn)
 DEFINE_TYPED_ARR(xc_XBlock_t,      xc_arr_XBlock_t,      appendXBlock)
 DEFINE_TYPED_ARR(xc_XFunc_t,       xc_arr_XFunc_t,       appendXFunc)
+DEFINE_TYPED_ARR(xc_XVal_t,        xc_arr_XVal_t,        appendXVal)
+DEFINE_TYPED_ARR(xc_XReloc_t,      xc_arr_XReloc_t,      appendXReloc)
 DEFINE_TYPED_ARR(xc_EncodedFunc_t, xc_arr_EncodedFunc_t, appendEncodedFunc)
 
 /* -- compact SHA-256 -- */

@@ -65,6 +65,20 @@ let m = a
 if b > m { m = b }
 return m' 4
 
+# Function calls + recursion.
+call() {  # $1 = full module source, $2 = expected
+    n=$((n+1))
+    printf '%s\n' "$1" > "$W/c$n.xi"
+    XC_OUT="$W" "$XC" --backend native "$W/c$n.xi" >/dev/null 2>&1
+    "$W/c$n"; got=$?
+    if [ "$got" -ne "$2" ]; then echo "  ✗ [call $n] -> exit $got (want $2)"; fail=1; return; fi
+    echo "  ✓ [call $n] -> exit $got"
+}
+call 'mapper fact(n: Integer) -> Integer { if n <= 1 { return 1 }  return n * fact(n - 1) }
+module M { entry main(args: String[]) -> Integer { return fact(5) } }' 120
+call 'mapper add(a: Integer, b: Integer) -> Integer { return a + b }
+module M { entry main(args: String[]) -> Integer { return add(add(10, 20), 12) } }' 42
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1

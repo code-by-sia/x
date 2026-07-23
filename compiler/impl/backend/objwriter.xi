@@ -15,8 +15,9 @@
 
 interface ObjectWriter {
     mapper   formatName() -> String
-    // Assemble the encoded module into an executable at binPath. True on success.
-    producer write(m: EncodedModule, binPath: String) -> Bool
+    // Assemble the linked code (32-bit words) into an executable at binPath, with
+    // the entry at word offset `entryWord` within the text. True on success.
+    producer write(code: Integer[], entryWord: Integer, binPath: String) -> Bool
 }
 
 // Emit a 16-byte, NUL-padded name field (segment / section names).
@@ -64,19 +65,17 @@ class MachoWriter implements ObjectWriter {
 
     mapper formatName() -> String => "mach-o"
 
-    producer write(m: EncodedModule, binPath: String) -> Bool {
-        // The single entry function's code words (milestone: one function).
-        let code: Integer[] = []
-        for f in m.funcs { code = f.code }
+    producer write(code: Integer[], entryWord: Integer, binPath: String) -> Bool {
         let codeBytes = 0
         for w in code { codeBytes = codeBytes + 4 }
 
         let vmbase = 4294967296                // 0x100000000
         let sizeofcmds = 592                   // fixed for the 12 load commands below
         let codeOff = alignUp(32 + sizeofcmds, 4)   // 624
-        let textFilesize = 16384               // one 16 KB page
-        let entryoff = codeOff
-        let linkeditOff = 16384
+        // __TEXT spans the header, load commands, and code, page-aligned (16 KB).
+        let textFilesize = alignUp(codeOff + codeBytes, 16384)
+        let entryoff = codeOff + entryWord * 4
+        let linkeditOff = textFilesize
 
         // __LINKEDIT contents: chained-fixups blob, empty sym/str table, signature.
         let cfLen = 48
