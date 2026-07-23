@@ -39,6 +39,31 @@ smoke "2 + 3 * 4" 14
 smoke "(2 + 3) * 4" 20
 smoke "100 - 58" 42
 smoke "1000 * 1000" 64      # 1000000 mod 256, exercises wraparound
+smoke "20 / 4" 5
+smoke "17 % 5" 2
+
+# Locals + control flow, checked against an expected exit code.
+flow() {  # $1 = body, $2 = expected
+    n=$((n+1))
+    printf 'module M { id = "f%s"\n entry main(args: String[]) -> Integer {\n%s\n } }\n' "$n" "$1" > "$W/f$n.xi"
+    XC_OUT="$W" "$XC" --backend native "$W/f$n.xi" >/dev/null 2>&1
+    "$W/f$n"; got=$?
+    if [ "$got" -ne "$2" ]; then echo "  ✗ [flow $n] -> exit $got (want $2)"; fail=1; return; fi
+    echo "  ✓ [flow $n] -> exit $got"
+}
+flow 'let s = 0
+let i = 1
+while i <= 10 { s = s + i  i = i + 1 }
+return s' 55
+flow 'let n = 5
+let f = 1
+while n > 1 { f = f * n  n = n - 1 }
+return f' 120
+flow 'let a = 3
+let b = 4
+let m = a
+if b > m { m = b }
+return m' 4
 
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"

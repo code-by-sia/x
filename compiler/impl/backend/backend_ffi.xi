@@ -6,6 +6,9 @@
 // because Xi has no bitwise/shift operators.
 extern "C" {
     mapper   appendInt(arr: Integer[], v: Integer) -> Integer[]
+    mapper   intArrLen(arr: Integer[]) -> Integer
+    mapper   intArrGet(arr: Integer[], i: Integer) -> Integer
+    mapper   setInt(arr: Integer[], i: Integer, v: Integer) -> Integer[]
     // Heap append for the XIR types — an array that escapes its function (the
     // lowered module) must be heap-built, never an array literal.
     mapper   appendXInsn(arr: XInsn[], v: XInsn) -> XInsn[]

@@ -113,3 +113,19 @@ mapper xi_br(target: Integer) -> XInsn =>
 
 mapper xi_brcond(a: XVal, t: Integer, f: Integer) -> XInsn =>
     XInsn { op: "brcond", typ: "void", dst: 0 - 1, a: a, b: xnone(), args: [], callee: "", tlabel: t, flabel: f }
+
+// mem[dst] = mem[src] — a slot-to-slot copy (used to write a local's slot).
+mapper xi_copy(dst: Integer, src: Integer) -> XInsn =>
+    XInsn { op: "copy", typ: "i64", dst: dst, a: xtemp(src), b: xnone(), args: [], callee: "", tlabel: 0, flabel: 0 }
+
+// mem[dst] = (mem[a] <cmp> mem[b]) ? 1 : 0 — `op` is eq/ne/slt/sle/sgt/sge.
+mapper xi_cmp(op: String, dst: Integer, a: Integer, b: Integer) -> XInsn =>
+    XInsn { op: op, typ: "i64", dst: dst, a: xtemp(a), b: xtemp(b), args: [], callee: "", tlabel: 0, flabel: 0 }
+
+// A branch target marker (emits no code; records its word offset).
+mapper xi_label(id: Integer) -> XInsn =>
+    XInsn { op: "label", typ: "void", dst: 0 - 1, a: xnone(), b: xnone(), args: [], callee: "", tlabel: id, flabel: 0 }
+
+// Branch to `target` label if mem[a] == 0.
+mapper xi_brz(a: Integer, target: Integer) -> XInsn =>
+    XInsn { op: "brz", typ: "void", dst: 0 - 1, a: xtemp(a), b: xnone(), args: [], callee: "", tlabel: target, flabel: 0 }

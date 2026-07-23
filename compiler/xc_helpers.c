@@ -376,6 +376,14 @@ xc_integer_t compile_c(xc_string_t cpath, xc_string_t binpath) {
 
 DEFINE_TYPED_ARR(xc_integer_t, xc_arr_integer_t, appendInt)
 
+/* Indexed read/write for Integer[] — the encoder needs random access to patch
+ * branch words after label positions are known, and the lowering keeps a
+ * name->slot table in parallel arrays. setInt mutates in place (the encoder's
+ * word buffer is freshly built and unshared). */
+xc_integer_t intArrLen(xc_arr_integer_t a) { return (xc_integer_t)a.len; }
+xc_integer_t intArrGet(xc_arr_integer_t a, xc_integer_t i) { return a.data[i]; }
+xc_arr_integer_t setInt(xc_arr_integer_t a, xc_integer_t i, xc_integer_t v) { a.data[i] = v; return a; }
+
 /* Heap append for the XIR value types, so arrays that escape a function (the
  * lowered module returned to the backend) survive — array *literals* get
  * block-scoped backing storage and must not be returned. Same pattern the
