@@ -28,6 +28,12 @@ extern "C" {
     producer xcb_ascii(h: Integer, s: String)           // append a string's bytes (no NUL)
     producer xcb_len(h: Integer) -> Integer             // current length
     producer xcb_sha256_append(h: Integer, from: Integer, to: Integer)  // append SHA-256 of buf[from,to)
+    producer xcb_ascii_unescape(h: Integer, s: String)                  // append s with \n \t ... resolved
+    mapper   unescapedLen(s: String) -> Integer                         // byte length after unescaping
+    producer strpool_reset()                                            // clear the string-constant pool
+    mapper   strpool_add(s: String) -> Integer                          // add a raw literal, return its id
+    mapper   strpool_len() -> Integer
+    mapper   strpool_get(i: Integer) -> String
     producer xcb_write_exec(h: Integer, path: String) -> Integer        // write + chmod +x; 0 = ok
 }
 

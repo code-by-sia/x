@@ -11,11 +11,11 @@
 type XReloc = { at: Integer, sym: String, kind: String, addend: Integer }
 type EncodedFunc = { name: String, code: Integer[], relocs: XReloc[] }
 type EncodedModule = { funcs: EncodedFunc[], entry: String }
-type EncResult = { words: Integer[], sites: Integer[], syms: String[] }
-// The linked code plus the external call sites the writer must route through
-// import stubs: `extSites` are word indices of BL placeholders, `extSyms` the
-// matching C symbols (with the macOS leading underscore).
-type LinkedCode = { words: Integer[], entryWord: Integer, ok: Bool, missing: String, extSites: Integer[], extSyms: String[] }
+type EncResult = { words: Integer[], sites: Integer[], syms: String[], strSites: Integer[], strIds: Integer[] }
+// The linked code plus what the writer must patch: `extSites`/`extSyms` are the
+// external-call BL placeholders and their C symbols; `strSites`/`strIds` are the
+// string-address adrp/add placeholders and their string-pool ids.
+type LinkedCode = { words: Integer[], entryWord: Integer, ok: Bool, missing: String, extSites: Integer[], extSyms: String[], strSites: Integer[], strIds: Integer[] }
 
 interface InsnEncoder {
     mapper   archName() -> String
@@ -58,6 +58,7 @@ mapper aAdrp(rd: Integer, imm21: Integer) -> Integer {
     return 2415919104 + lo * 536870912 + hi * 32 + rd    // 0x90000000
 }
 mapper aLdr(rt: Integer, rn: Integer, off: Integer) -> Integer => 4181721088 + (off / 8) * 1024 + rn * 32 + rt
+mapper aAddImm(rd: Integer, rn: Integer, imm: Integer) -> Integer => 2432696320 + imm * 1024 + rn * 32 + rd   // 0x91000000
 
 mapper invCond(op: String) -> Integer {
     if op == "eq"  { return 1 }
@@ -150,12 +151,21 @@ mapper encodeArm64(f: XFunc) -> EncResult {
     let fReg: Integer[] = []
     let cSites: Integer[] = []
     let cSyms: String[] = []
+    let strSites: Integer[] = []
+    let strIds: Integer[] = []
 
     for blk in f.blocks {
         for ins in blk.insns {
             if ins.op == "label" {
                 labelPos = setInt(labelPos, ins.tlabel, intArrLen(ws))
             } else {
+                if ins.op == "straddr" {
+                    strSites = appendInt(strSites, intArrLen(ws))
+                    strIds = appendInt(strIds, ins.a.imm)
+                    ws = appendInt(ws, 0)                        // adrp placeholder
+                    ws = appendInt(ws, 0)                        // add  placeholder
+                    ws = appendInt(ws, aStrSp(9, ins.dst * 8))   // store pointer
+                } else {
                 if ins.op == "br" {
                     fWord = appendInt(fWord, intArrLen(ws))
                     fTarget = appendInt(fTarget, ins.tlabel)
@@ -186,6 +196,7 @@ mapper encodeArm64(f: XFunc) -> EncResult {
                         }
                     }
                 }
+                }
             }
         }
     }
@@ -198,7 +209,7 @@ mapper encodeArm64(f: XFunc) -> EncResult {
         else { ws = setInt(ws, wi, aCbz(intArrGet(fReg, k), disp)) }
         k = k + 1
     }
-    return EncResult { words: ws, sites: cSites, syms: cSyms }
+    return EncResult { words: ws, sites: cSites, syms: cSyms, strSites: strSites, strIds: strIds }
 }
 
 mapper lookupOff(names: String[], offs: Integer[], name: String) -> Integer {
@@ -226,28 +237,35 @@ mapper linkModule(em: EncodedModule, externNames: String[]) -> LinkedCode {
     }
     let extSites: Integer[] = []
     let extSyms: String[] = []
+    let strSites: Integer[] = []
+    let strIds: Integer[] = []
     let fi = 0
     for f in em.funcs {
         let base = intArrGet(foffs, fi)
         for r in f.relocs {
             let site = base + r.at
-            let callee = lookupOff(fnames, foffs, r.sym)
-            if callee >= 0 {
-                allWords = setInt(allWords, site, aBl(callee - site))
+            if r.kind == "straddr" {
+                strSites = appendInt(strSites, site)
+                strIds = appendInt(strIds, r.addend)
             } else {
-                if strIn(externNames, r.sym) {
-                    extSites = appendInt(extSites, site)
-                    extSyms = appendString(extSyms, "_" + r.sym)   // macOS C symbol
+                let callee = lookupOff(fnames, foffs, r.sym)
+                if callee >= 0 {
+                    allWords = setInt(allWords, site, aBl(callee - site))
                 } else {
-                    return LinkedCode { words: allWords, entryWord: 0, ok: false, missing: r.sym, extSites: extSites, extSyms: extSyms }
+                    if strIn(externNames, r.sym) {
+                        extSites = appendInt(extSites, site)
+                        extSyms = appendString(extSyms, "_" + r.sym)   // macOS C symbol
+                    } else {
+                        return LinkedCode { words: allWords, entryWord: 0, ok: false, missing: r.sym, extSites: extSites, extSyms: extSyms, strSites: strSites, strIds: strIds }
+                    }
                 }
             }
         }
         fi = fi + 1
     }
     let entryWord = lookupOff(fnames, foffs, em.entry)
-    if entryWord < 0 { return LinkedCode { words: allWords, entryWord: 0, ok: false, missing: em.entry, extSites: extSites, extSyms: extSyms } }
-    return LinkedCode { words: allWords, entryWord: entryWord, ok: true, missing: "", extSites: extSites, extSyms: extSyms }
+    if entryWord < 0 { return LinkedCode { words: allWords, entryWord: 0, ok: false, missing: em.entry, extSites: extSites, extSyms: extSyms, strSites: strSites, strIds: strIds } }
+    return LinkedCode { words: allWords, entryWord: entryWord, ok: true, missing: "", extSites: extSites, extSyms: extSyms, strSites: strSites, strIds: strIds }
 }
 
 // AArch64 (arm64) — the host architecture.
@@ -262,6 +280,11 @@ class Arm64Encoder implements InsnEncoder {
         while i < intArrLen(er.sites) {
             relocs = appendXReloc(relocs, XReloc { at: intArrGet(er.sites, i), sym: stringArrGet(er.syms, i), kind: "call26", addend: 0 })
             i = i + 1
+        }
+        let j = 0
+        while j < intArrLen(er.strSites) {
+            relocs = appendXReloc(relocs, XReloc { at: intArrGet(er.strSites, j), sym: "", kind: "straddr", addend: intArrGet(er.strIds, j) })
+            j = j + 1
         }
         return EncodedFunc { name: f.name, code: er.words, relocs: relocs }
     }

@@ -482,6 +482,33 @@ void xcb_sha256_append(xc_integer_t h, xc_integer_t from, xc_integer_t to) {
     unsigned char d[32]; xcsha_final(&c, d);
     xcb_grow((int)h, 32); memcpy(xcb_p[h] + xcb_l[h], d, 32); xcb_l[h] += 32;
 }
+/* Process-global string-constant pool for the native backend (one compile per
+ * process). strpool_add stores the raw literal text (which outlives the compile
+ * in the parsed program) and returns its id. */
+static xc_string_t g_strpool[8192];
+static int g_strpool_n = 0;
+void         strpool_reset(void) { g_strpool_n = 0; }
+xc_integer_t strpool_add(xc_string_t s) { g_strpool[g_strpool_n] = s; return (xc_integer_t)(g_strpool_n++); }
+xc_integer_t strpool_len(void) { return (xc_integer_t)g_strpool_n; }
+xc_string_t  strpool_get(xc_integer_t i) { return g_strpool[i]; }
+
+/* Unescape a source string literal (\n \t \r \0 \\ \" ...) — length, and append. */
+xc_integer_t unescapedLen(xc_string_t s) {
+    xc_integer_t n = 0;
+    for (size_t i = 0; i < s.len; i++) { if (s.data[i] == '\\' && i + 1 < s.len) i++; n++; }
+    return n;
+}
+void xcb_ascii_unescape(xc_integer_t h, xc_string_t s) {
+    for (size_t i = 0; i < s.len; i++) {
+        unsigned char c = (unsigned char)s.data[i];
+        if (c == '\\' && i + 1 < s.len) {
+            unsigned char d = (unsigned char)s.data[++i];
+            if (d == 'n') c = '\n'; else if (d == 't') c = '\t';
+            else if (d == 'r') c = '\r'; else if (d == '0') c = '\0'; else c = d;
+        }
+        xcb_u8(h, c);
+    }
+}
 xc_integer_t xcb_write_exec(xc_integer_t h, xc_string_t path) {
     char* p = xc_string_to_cstr(path);
     FILE* f = fopen(p, "wb");

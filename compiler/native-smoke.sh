@@ -94,6 +94,12 @@ XC_OUT="$W" "$XC" --backend native "$W/rt.xi" >/dev/null 2>&1
 rtout=$("$W/rt" 2>/dev/null)
 if [ "$rtout" = "42" ]; then echo "  ✓ runtime call: xstd_put_int prints 42"; else echo "  ✗ runtime call printed \"$rtout\""; fail=1; fi
 
+# String literal passed to a runtime string call (native hello world).
+printf 'extern "C" { producer xstd_put_str(s: String) }\nmodule M { entry main(args: String[]) -> Integer { xstd_put_str("hi\\n")  return 0 } }\n' > "$W/hw.xi"
+XC_OUT="$W" "$XC" --backend native "$W/hw.xi" >/dev/null 2>&1
+hwout=$("$W/hw" 2>/dev/null)
+if [ "$hwout" = "hi" ]; then echo "  ✓ string: xstd_put_str prints hi"; else echo "  ✗ string printed \"$hwout\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1

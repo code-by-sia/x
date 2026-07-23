@@ -129,3 +129,7 @@ mapper xi_label(id: Integer) -> XInsn =>
 // Branch to `target` label if mem[a] == 0.
 mapper xi_brz(a: Integer, target: Integer) -> XInsn =>
     XInsn { op: "brz", typ: "void", dst: 0 - 1, a: xtemp(a), b: xnone(), args: [], callee: "", tlabel: target, flabel: 0 }
+
+// mem[dst] = address of string constant `strid` (resolved to the __TEXT pool).
+mapper xi_straddr(dst: Integer, strid: Integer) -> XInsn =>
+    XInsn { op: "straddr", typ: "ptr", dst: dst, a: ximm(strid), b: xnone(), args: [], callee: "", tlabel: 0, flabel: 0 }

@@ -20,7 +20,7 @@ interface ObjectWriter {
     // the entry at word offset `entryWord`. `extSites`/`extSyms` are the external
     // call sites and their C symbols, routed through import stubs. `runtimePath`
     // is the runtime dylib to link when a call targets it. True on success.
-    producer write(code: Integer[], entryWord: Integer, extSites: Integer[], extSyms: String[], runtimePath: String, binPath: String) -> Bool
+    producer write(code: Integer[], entryWord: Integer, extSites: Integer[], extSyms: String[], strSites: Integer[], strIds: Integer[], runtimePath: String, binPath: String) -> Bool
 }
 
 // Is `s` present in the string list? (A local `String[]` does not always resolve
@@ -91,7 +91,7 @@ class MachoWriter implements ObjectWriter {
     mapper formatName() -> String => "mach-o"
     mapper osName() -> String => "macos"
 
-    producer write(code0: Integer[], entryWord: Integer, extSites: Integer[], extSyms: String[], runtimePath: String, binPath: String) -> Bool {
+    producer write(code0: Integer[], entryWord: Integer, extSites: Integer[], extSyms: String[], strSites: Integer[], strIds: Integer[], runtimePath: String, binPath: String) -> Bool {
         // Distinct imported symbols (one __got slot + stub each).
         let importSyms: String[] = []
         let ei = 0
@@ -118,6 +118,18 @@ class MachoWriter implements ObjectWriter {
         while sc < nImports * 3 { code = appendInt(code, 0)  sc = sc + 1 }
         let codeBytes = intArrLen(code) * 4
 
+        // String constants follow the code in __TEXT. Record each one's byte
+        // offset within the pool and the total pool size (unescaped).
+        let nStr = strpool_len()
+        let strOffs: Integer[] = []
+        let strBytes = 0
+        let so = 0
+        while so < nStr {
+            strOffs = appendInt(strOffs, strBytes)
+            strBytes = strBytes + unescapedLen(strpool_get(so))
+            so = so + 1
+        }
+
         let vmbase = 4294967296
         let ncmds = 12
         let sizeofcmds = 592
@@ -125,7 +137,8 @@ class MachoWriter implements ObjectWriter {
         let rtCmdSize = alignUp(24 + string_len(runtimePath) + 1, 8)
         if hasRuntime { ncmds = ncmds + 1  sizeofcmds = sizeofcmds + rtCmdSize }
         let codeOff = alignUp(32 + sizeofcmds, 4)
-        let textFilesize = alignUp(codeOff + codeBytes, 16384)
+        let strDataStart = codeOff + codeBytes
+        let textFilesize = alignUp(strDataStart + strBytes, 16384)
         let entryoff = codeOff + entryWord * 4
 
         let dataOff = textFilesize
@@ -156,6 +169,19 @@ class MachoWriter implements ObjectWriter {
                 code = setInt(code, site, aBl(stubWord - site))
                 k = k + 1
             }
+        }
+
+        // Resolve string addresses: adrp x9, str@page ; add x9, x9, str@pageoff.
+        let sp = 0
+        while sp < intArrLen(strSites) {
+            let site = intArrGet(strSites, sp)
+            let strAddr = vmbase + strDataStart + intArrGet(strOffs, intArrGet(strIds, sp))
+            let insnVm = vmbase + codeOff + site * 4
+            let strPage = strAddr - (strAddr % 4096)
+            let insnPage = insnVm - (insnVm % 4096)
+            code = setInt(code, site, aAdrp(9, (strPage - insnPage) / 4096))
+            code = setInt(code, site + 1, aAddImm(9, 9, strAddr % 4096))
+            sp = sp + 1
         }
 
         // __LINKEDIT: chained fixups (with imports), empty sym/str table, signature.
@@ -197,7 +223,7 @@ class MachoWriter implements ObjectWriter {
         // ── load commands ──
         emitSeg(b, "__PAGEZERO", 72, 0, vmbase, 0, 0, 0, 0, 0, 0)
         emitSeg(b, "__TEXT", 152, vmbase, textFilesize, 0, textFilesize, 5, 5, 1, 0)
-        emitSect(b, "__text", "__TEXT", vmbase + codeOff, codeBytes, codeOff, 2, 2147484672)
+        emitSect(b, "__text", "__TEXT", vmbase + codeOff, codeBytes + strBytes, codeOff, 2, 2147484672)
         if hasImports {
             emitSeg(b, "__DATA_CONST", 152, gotVm, dataFilesize, dataOff, dataFilesize, 3, 3, 1, 16)  // SG_READ_ONLY
             emitSect(b, "__got", "__DATA_CONST", gotVm, nImports * 8, dataOff, 3, 6)                    // S_NON_LAZY_SYMBOL_POINTERS
@@ -274,6 +300,9 @@ class MachoWriter implements ObjectWriter {
         // ── __TEXT body ──
         xcb_zeros(b, codeOff - xcb_len(b))
         for w in code { xcb_u32(b, w) }
+        // string constant pool (unescaped), immediately after the code
+        let se = 0
+        while se < nStr { xcb_ascii_unescape(b, strpool_get(se))  se = se + 1 }
 
         // ── __DATA_CONST: __got bind pointers ──
         if hasImports {

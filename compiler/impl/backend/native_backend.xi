@@ -97,18 +97,51 @@ mapper psEmitCall(ps: PS, callee: String, argSlots: Integer[], dst: Integer) -> 
     return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_call(dst, callee, slotsToVals(argSlots), "i64")), nextSlot: dst + 1, resultTemp: dst, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet }
 }
 
-// call := IDENT '(' (expr (',' expr)*)? ')'   — ps is positioned at '('
+mapper psEmitStrAddr(ps: PS, strid: Integer) -> PS {
+    let t = ps.nextSlot
+    return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_straddr(t, strid)), nextSlot: t + 1, resultTemp: t, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet }
+}
+mapper concatInts(a: Integer[], b: Integer[]) -> Integer[] {
+    let out = a
+    let i = 0
+    while i < intArrLen(b) { out = appendInt(out, intArrGet(b, i))  i = i + 1 }
+    return out
+}
+
+// One argument: a string literal (which occupies two registers, ptr + len) or
+// an integer expression. Returns the updated state and the slot(s) it produced.
+type ArgResult = { ps: PS, slots: Integer[] }
+mapper parseOneArg(ps: PS) -> ArgResult {
+    if psKind(ps) == 4 {                          // string literal
+        let ptrSlot = ps.nextSlot
+        let a1 = psEmitStrAddr(ps, strpool_add(psText(ps)))
+        let lenSlot = a1.nextSlot
+        let a2 = psAdvance(psEmitConst(a1, unescapedLen(psText(ps))))
+        let sl: Integer[] = []
+        sl = appendInt(sl, ptrSlot)
+        sl = appendInt(sl, lenSlot)
+        return ArgResult { ps: a2, slots: sl }
+    }
+    let e = parseExpr(ps)
+    let sl: Integer[] = []
+    if e.ok { sl = appendInt(sl, e.resultTemp) }
+    return ArgResult { ps: e, slots: sl }
+}
+
+// call := IDENT '(' (arg (',' arg)*)? ')'   — ps is positioned at '('
 mapper parseCall(ps: PS, name: String) -> PS {
     let cur = psAdvance(ps)                       // consume '('
     let argSlots: Integer[] = []
     if psKind(cur) != 101 {
-        cur = parseExpr(cur)
-        if not cur.ok { return cur }
-        argSlots = appendInt(argSlots, cur.resultTemp)
+        let r = parseOneArg(cur)
+        if not r.ps.ok { return r.ps }
+        cur = r.ps
+        argSlots = concatInts(argSlots, r.slots)
         while psKind(cur) == 106 {                // ','
-            cur = parseExpr(psAdvance(cur))
-            if not cur.ok { return cur }
-            argSlots = appendInt(argSlots, cur.resultTemp)
+            let r2 = parseOneArg(psAdvance(cur))
+            if not r2.ps.ok { return r2.ps }
+            cur = r2.ps
+            argSlots = concatInts(argSlots, r2.slots)
         }
     }
     if psKind(cur) != 101 { return psFail(cur) }  // ')'
@@ -369,6 +402,7 @@ mapper lowerProgram(prog: Program) -> LowerResult {
 // Compile a program with a chosen encoder/writer pair. A free function (not a
 // method) so it can be called with the selected interface values as arguments.
 producer compileNative(diag: Diagnostics, host: Host, enc: InsnEncoder, obj: ObjectWriter, prog: Program, binPath: String) -> Integer {
+    strpool_reset()
     let lo = lowerProgram(prog)
     if not lo.ok {
         diag.error(0, "native backend: " + lo.reason)
@@ -385,7 +419,7 @@ producer compileNative(diag: Diagnostics, host: Host, enc: InsnEncoder, obj: Obj
         return 1
     }
     let runtimePath = host.env("XC_RUNTIME", "runtime") + "/runtime.dylib"
-    if obj.write(lk.words, lk.entryWord, lk.extSites, lk.extSyms, runtimePath, binPath) { return 0 }
+    if obj.write(lk.words, lk.entryWord, lk.extSites, lk.extSyms, lk.strSites, lk.strIds, runtimePath, binPath) { return 0 }
     diag.error(0, "native backend: failed to write executable " + binPath)
     return 1
 }

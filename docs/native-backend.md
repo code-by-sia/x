@@ -25,7 +25,8 @@ The native backend is being built in stages behind the flag, with the C backend 
 - `let` bindings, assignment, and `return`;
 - `if` / `else` and `while`;
 - calls to other integer functions (including recursion and mutual recursion);
-- calls to declared `extern "C"` functions with integer arguments (bound from libSystem by dyld — see below);
+- calls to declared `extern "C"` functions with integer or string-literal arguments (bound from libSystem or the runtime by dyld — see below);
+- string literals as call arguments (their bytes go into a constant pool in `__TEXT`; the address is materialized with adrp/add and passed as a pointer plus length);
 - expressions over integer literals, parameters, locals, `+ - * / %`, comparisons (`== != < <= > >=`), and parentheses.
 
 Locals and parameters get dedicated stack slots (stable across loop iterations); expression temps get fresh slots; branches are resolved in a second pass, and calls follow the AArch64 convention (args in `x0`..`x7`, result in `x0`, `fp`/`lr` saved). The backend lays the functions out and patches every `BL` itself. Anything outside the subset (a string, a non-integer function, an unsupported operator) is reported and refused rather than mis-compiled:
@@ -69,7 +70,8 @@ Supporting a new arch_os is therefore additive: write an `InsnEncoder` for the i
 | Function calls (params, recursion, AArch64 convention) | done |
 | External calls via dyld imports (stubs, `__got`, chained fixups) | done |
 | Link the runtime (`xstd_*` bound from runtime.dylib) | done |
-| Strings and the arena | next |
+| String literals (constant pool, passed as pointer + length) | done |
+| String variables, concatenation, and the arena | next |
 | Full language coverage, diffed against the C backend | planned |
 | Self-host: compile the compiler with the native backend | planned |
 | Second target (Linux ELF, x86-64) | planned |
