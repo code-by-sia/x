@@ -84,6 +84,7 @@ import "impl/codegen/xi_codegen.xi"
 // report "not yet implemented" so the default C path never regresses.
 import "impl/backend/backend_ffi.xi"
 import "impl/backend/xir.xi"
+import "impl/backend/target.xi"
 import "impl/backend/encoder.xi"
 import "impl/backend/objwriter.xi"
 import "impl/backend/native_backend.xi"

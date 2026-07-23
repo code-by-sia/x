@@ -28,3 +28,6 @@ editors/zed/grammars/
 website/node_modules/
 website/build/
 website/.docusaurus/
+
+# native backend runtime link (built by bootstrap.sh)
+runtime/runtime.dylib

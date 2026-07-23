@@ -47,6 +47,11 @@ echo "==> Building the load tester 'loadtest' from compiler/loadtest.xi ..."
 cp "$XC_OUT/loadtest" bin/loadtest
 echo "    built ./bin/loadtest"
 
+echo "==> Building runtime.dylib (native backend runtime link) ..."
+cc -dynamiclib -std=c99 -O2 -w -install_name "$ROOT/runtime/runtime.dylib" \
+   "$ROOT/runtime/runtime.c" -o "$ROOT/runtime/runtime.dylib" -lm -lpthread
+echo "    built runtime/runtime.dylib"
+
 echo "Bootstrap complete. The compiler is built from current Xi source."
 echo "  ./compiler/xc <file.xi>   compile to a native binary"
 echo "  ./bin/xi                 start the REPL"

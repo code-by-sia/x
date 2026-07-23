@@ -366,27 +366,45 @@ mapper lowerProgram(prog: Program) -> LowerResult {
     return LowerResult { ok: true, module: XModule { funcs: funcs, externs: [], entry: "main" }, reason: "" }
 }
 
-class XiNativeBackend implements NativeBackend {
-    deps { diag: Diagnostics, enc: InsnEncoder, obj: ObjectWriter }
+// Compile a program with a chosen encoder/writer pair. A free function (not a
+// method) so it can be called with the selected interface values as arguments.
+producer compileNative(diag: Diagnostics, host: Host, enc: InsnEncoder, obj: ObjectWriter, prog: Program, binPath: String) -> Integer {
+    let lo = lowerProgram(prog)
+    if not lo.ok {
+        diag.error(0, "native backend: " + lo.reason)
+        return 1
+    }
+    let m = lo.module
+    let efs: EncodedFunc[] = []
+    for f in m.funcs { efs = appendEncodedFunc(efs, enc.encode(f)) }
+    let externNames: String[] = []
+    for x in prog.externs { externNames = appendString(externNames, x.name) }
+    let lk = linkModule(EncodedModule { funcs: efs, entry: m.entry }, externNames)
+    if not lk.ok {
+        diag.error(0, "native backend: unresolved call to " + lk.missing)
+        return 1
+    }
+    let runtimePath = host.env("XC_RUNTIME", "runtime") + "/runtime.dylib"
+    if obj.write(lk.words, lk.entryWord, lk.extSites, lk.extSyms, runtimePath, binPath) { return 0 }
+    diag.error(0, "native backend: failed to write executable " + binPath)
+    return 1
+}
 
+class XiNativeBackend implements NativeBackend {
+    deps { diag: Diagnostics, host: Host, encoders: InsnEncoder[], writers: ObjectWriter[] }
+
+    // Select the encoder/writer matching the target (host by default, overridable
+    // with XC_ARCH/XC_OS), then compile with them.
     producer emit(prog: Program, srcPath: String, binPath: String) -> Integer {
-        let lo = lowerProgram(prog)
-        if not lo.ok {
-            diag.error(0, "native backend: " + lo.reason)
-            return 1
+        let tgt = Target { arch: host.env("XC_ARCH", "arm64"), os: host.env("XC_OS", "macos") }
+        for e in encoders {
+            if e.archName() == tgt.arch {
+                for w in writers {
+                    if w.osName() == tgt.os { return compileNative(diag, host, e, w, prog, binPath) }
+                }
+            }
         }
-        let m = lo.module
-        let efs: EncodedFunc[] = []
-        for f in m.funcs { efs = appendEncodedFunc(efs, enc.encode(f)) }
-        let externNames: String[] = []
-        for e in prog.externs { externNames = appendString(externNames, e.name) }
-        let lk = linkModule(EncodedModule { funcs: efs, entry: m.entry }, externNames)
-        if not lk.ok {
-            diag.error(0, "native backend: unresolved call to " + lk.missing)
-            return 1
-        }
-        if obj.write(lk.words, lk.entryWord, lk.extSites, lk.extSyms, binPath) { return 0 }
-        diag.error(0, "native backend: failed to write executable " + binPath)
+        diag.error(0, "native backend: no backend for target " + tgt.arch + "-" + tgt.os)
         return 1
     }
 }

@@ -85,6 +85,15 @@ XC_OUT="$W" "$XC" --backend native "$W/imp.xi" >/dev/null 2>&1
 out=$("$W/imp" 2>/dev/null)
 if [ "$out" = "OK" ]; then echo "  ✓ import: putchar prints \"OK\""; else echo "  ✗ import: putchar printed \"$out\""; fail=1; fi
 
+# Runtime call via the runtime dylib (xstd_put_int), checked by output.
+[ -f "$ROOT/runtime/runtime.dylib" ] || cc -dynamiclib -std=c99 -O2 -w \
+    -install_name "$ROOT/runtime/runtime.dylib" "$ROOT/runtime/runtime.c" \
+    -o "$ROOT/runtime/runtime.dylib" -lm -lpthread 2>/dev/null
+printf 'extern "C" { producer xstd_put_int(n: Integer) }\nmodule M { entry main(args: String[]) -> Integer { xstd_put_int(42)  return 0 } }\n' > "$W/rt.xi"
+XC_OUT="$W" "$XC" --backend native "$W/rt.xi" >/dev/null 2>&1
+rtout=$("$W/rt" 2>/dev/null)
+if [ "$rtout" = "42" ]; then echo "  ✓ runtime call: xstd_put_int prints 42"; else echo "  ✗ runtime call printed \"$rtout\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1

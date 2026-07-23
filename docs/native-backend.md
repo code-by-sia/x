@@ -50,7 +50,13 @@ Apple Silicon sets the shape of the output. A binary must go through the dynamic
 
 The layout logic lives in Xi; the machine only supplies the low-level primitives Xi lacks (a byte buffer, SHA-256, a raw file write).
 
-The purest form of a toolchain-free binary is a static Linux ELF that makes raw system calls, needing no loader, no libc, and no signature. That is a later target; the seams (one encoder per instruction set, one writer per object format) are already in place for it.
+The purest form of a toolchain-free binary is a static Linux ELF that makes raw system calls, needing no loader, no libc, and no signature. That is a later target; the seams are already in place for it.
+
+## Targeting other architectures
+
+The backend is organized around two interfaces: `InsnEncoder` (an instruction set) and `ObjectWriter` (an object format for an OS). It is injected every implementor of each, and selects the pair matching the target: the encoder whose `archName()` equals the target arch, and the writer whose `osName()` equals the target os. The target defaults to the host and is overridable with `XC_ARCH` and `XC_OS`.
+
+Supporting a new arch_os is therefore additive: write an `InsnEncoder` for the instruction set (e.g. x86-64) and, if needed, an `ObjectWriter` for the format (e.g. ELF for Linux), and they are discovered and selected automatically. Today the set is `Arm64Encoder` + `MachoWriter` (arm64/macos).
 
 ## Roadmap
 
@@ -62,7 +68,8 @@ The purest form of a toolchain-free binary is a static Linux ELF that makes raw 
 | Locals, comparisons, `if`/`else`, `while` | done |
 | Function calls (params, recursion, AArch64 convention) | done |
 | External calls via dyld imports (stubs, `__got`, chained fixups) | done |
-| Link the prebuilt runtime object | next |
+| Link the runtime (`xstd_*` bound from runtime.dylib) | done |
+| Strings and the arena | next |
 | Full language coverage, diffed against the C backend | planned |
 | Self-host: compile the compiler with the native backend | planned |
 | Second target (Linux ELF, x86-64) | planned |

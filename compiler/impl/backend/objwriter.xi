@@ -15,10 +15,12 @@
 
 interface ObjectWriter {
     mapper   formatName() -> String
+    mapper   osName() -> String                 // the OS this writer produces binaries for
     // Assemble the linked code (32-bit words) into an executable at binPath, with
     // the entry at word offset `entryWord`. `extSites`/`extSyms` are the external
-    // call sites and their C symbols, routed through import stubs. True on success.
-    producer write(code: Integer[], entryWord: Integer, extSites: Integer[], extSyms: String[], binPath: String) -> Bool
+    // call sites and their C symbols, routed through import stubs. `runtimePath`
+    // is the runtime dylib to link when a call targets it. True on success.
+    producer write(code: Integer[], entryWord: Integer, extSites: Integer[], extSyms: String[], runtimePath: String, binPath: String) -> Bool
 }
 
 // Is `s` present in the string list? (A local `String[]` does not always resolve
@@ -87,8 +89,9 @@ class MachoWriter implements ObjectWriter {
     deps {}
 
     mapper formatName() -> String => "mach-o"
+    mapper osName() -> String => "macos"
 
-    producer write(code0: Integer[], entryWord: Integer, extSites: Integer[], extSyms: String[], binPath: String) -> Bool {
+    producer write(code0: Integer[], entryWord: Integer, extSites: Integer[], extSyms: String[], runtimePath: String, binPath: String) -> Bool {
         // Distinct imported symbols (one __got slot + stub each).
         let importSyms: String[] = []
         let ei = 0
@@ -99,6 +102,14 @@ class MachoWriter implements ObjectWriter {
         }
         let nImports = stringArrLen(importSyms)
         let hasImports = nImports > 0
+        // Runtime symbols (xstd_*) bind from the runtime dylib (2nd LC_LOAD_DYLIB,
+        // ordinal 2); everything else from libSystem (ordinal 1).
+        let hasRuntime = false
+        let ri = 0
+        while ri < nImports {
+            if stringArrGet(importSyms, ri).startsWith2("_xstd_") { hasRuntime = true }
+            ri = ri + 1
+        }
 
         // Append one 3-instruction stub per import to the code.
         let code = code0
@@ -110,7 +121,9 @@ class MachoWriter implements ObjectWriter {
         let vmbase = 4294967296
         let ncmds = 12
         let sizeofcmds = 592
-        if hasImports { ncmds = 13  sizeofcmds = 744 }   // + __DATA_CONST segment (72 + 80)
+        if hasImports { ncmds = ncmds + 1  sizeofcmds = sizeofcmds + 152 }   // __DATA_CONST
+        let rtCmdSize = alignUp(24 + string_len(runtimePath) + 1, 8)
+        if hasRuntime { ncmds = ncmds + 1  sizeofcmds = sizeofcmds + rtCmdSize }
         let codeOff = alignUp(32 + sizeofcmds, 4)
         let textFilesize = alignUp(codeOff + codeBytes, 16384)
         let entryoff = codeOff + entryWord * 4
@@ -224,6 +237,18 @@ class MachoWriter implements ObjectWriter {
         xcb_u8(b, 0)
         xcb_zeros(b, 5)
 
+        if hasRuntime {            // LC_LOAD_DYLIB #2: the runtime (ordinal 2)
+            xcb_u32(b, 12)
+            xcb_u32(b, rtCmdSize)
+            xcb_u32(b, 24)         // name offset
+            xcb_u32(b, 2)          // timestamp
+            xcb_u32(b, 65536)      // current version
+            xcb_u32(b, 65536)      // compatibility version
+            xcb_ascii(b, runtimePath)
+            xcb_u8(b, 0)
+            xcb_zeros(b, rtCmdSize - 24 - string_len(runtimePath) - 1)
+        }
+
         xcb_u32(b, 50)             // LC_BUILD_VERSION
         xcb_u32(b, 24)
         xcb_u32(b, 1)
@@ -293,7 +318,9 @@ class MachoWriter implements ObjectWriter {
             let mm = 0
             let nameOff = 1
             while mm < nImports {
-                xcb_u32(b, 1 + nameOff * 512)   // lib_ordinal=1, name_off<<9
+                let ord = 1                                          // libSystem
+                if stringArrGet(importSyms, mm).startsWith2("_xstd_") { ord = 2 }  // runtime dylib
+                xcb_u32(b, ord + nameOff * 512)   // lib_ordinal | name_off<<9
                 nameOff = nameOff + string_len(stringArrGet(importSyms, mm)) + 1
                 mm = mm + 1
             }

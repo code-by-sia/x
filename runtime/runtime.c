@@ -1026,6 +1026,7 @@ xc_integer_t xstd_uptime_ms(void) {
     return now - xw_started_ms;
 }
 void         xstd_mark_start(void)      { xw_started_ms = xstd_now_nanos() / 1000000; }
+void         xstd_put_int(xc_integer_t n) { printf("%lld\n", (long long)n); }
 xc_integer_t xstd_request_count(void)   { return xw_request_count; }
 
 xc_integer_t xstd_now_nanos(void) {
