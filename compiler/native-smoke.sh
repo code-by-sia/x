@@ -112,6 +112,12 @@ XC_OUT="$W" "$XC" --backend native "$W/fn.xi" >/dev/null 2>&1
 fnout=$("$W/fn" 2>/dev/null)
 if [ "$fnout" = "hi bob" ]; then echo "  ✓ string fn: greet(\"bob\")"; else echo "  ✗ string fn printed \"$fnout\""; fail=1; fi
 
+# Integer array: literal, .len, and indexing in a loop.
+printf 'extern "C" { producer xstd_put_int(n: Integer) }\nmodule M { entry main(args: String[]) -> Integer { let a = [4, 5, 6]  let s = 0  let i = 0  while i < a.len { s = s + a.data[i]  i = i + 1 }  xstd_put_int(s)  return 0 } }\n' > "$W/arr.xi"
+XC_OUT="$W" "$XC" --backend native "$W/arr.xi" >/dev/null 2>&1
+arrout=$("$W/arr" 2>/dev/null)
+if [ "$arrout" = "15" ]; then echo "  ✓ array: sum [4,5,6] = 15"; else echo "  ✗ array printed \"$arrout\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1

@@ -58,6 +58,8 @@ mapper aAdrp(rd: Integer, imm21: Integer) -> Integer {
     return 2415919104 + lo * 536870912 + hi * 32 + rd    // 0x90000000
 }
 mapper aLdr(rt: Integer, rn: Integer, off: Integer) -> Integer => 4181721088 + (off / 8) * 1024 + rn * 32 + rt
+mapper aStr(rt: Integer, rn: Integer, off: Integer) -> Integer => 4177526784 + (off / 8) * 1024 + rn * 32 + rt
+mapper aAddShift(rd: Integer, rn: Integer, rm: Integer, sh: Integer) -> Integer => 2332033024 + rm * 65536 + sh * 1024 + rn * 32 + rd  // ADD Xd,Xn,Xm,LSL #sh
 mapper aAddImm(rd: Integer, rn: Integer, imm: Integer) -> Integer => 2432696320 + imm * 1024 + rn * 32 + rd   // 0x91000000
 
 mapper invCond(op: String) -> Integer {
@@ -93,6 +95,18 @@ mapper emitInsn(ws: Integer[], ins: XInsn, locals: Integer) -> Integer[] {
     if ins.op == "copy" {
         let w1 = appendInt(ws, aLdrSp(9, ins.a.id * 8))
         return appendInt(w1, aStrSp(9, ins.dst * 8))
+    }
+    if ins.op == "astorec" {
+        let w1 = appendInt(ws, aLdrSp(9, ins.a.id * 8))       // data pointer
+        let w2 = appendInt(w1, aLdrSp(10, ins.b.id * 8))      // value
+        return appendInt(w2, aStr(10, 9, ins.tlabel * 8))     // ptr[idx] = value
+    }
+    if ins.op == "aload" {
+        let w1 = appendInt(ws, aLdrSp(9, ins.a.id * 8))       // data pointer
+        let w2 = appendInt(w1, aLdrSp(10, ins.b.id * 8))      // index
+        let w3 = appendInt(w2, aAddShift(9, 9, 10, 3))        // pointer + index*8
+        let w4 = appendInt(w3, aLdr(11, 9, 0))                // load element
+        return appendInt(w4, aStrSp(11, ins.dst * 8))
     }
     if ins.op == "ret" {
         let w1 = appendInt(ws, aLdrSp(0, ins.a.id * 8))

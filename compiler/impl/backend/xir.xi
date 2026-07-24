@@ -141,3 +141,11 @@ mapper xi_brz(a: Integer, target: Integer) -> XInsn =>
 // mem[dst] = address of string constant `strid` (resolved to the __TEXT pool).
 mapper xi_straddr(dst: Integer, strid: Integer) -> XInsn =>
     XInsn { op: "straddr", typ: "ptr", dst: dst, a: ximm(strid), b: xnone(), args: [], callee: "", tlabel: 0, flabel: 0 }
+
+// ((i64*)mem[a])[idx] = mem[b]  — store an element at a constant index.
+mapper xi_astorec(ptrSlot: Integer, idx: Integer, valSlot: Integer) -> XInsn =>
+    XInsn { op: "astorec", typ: "void", dst: 0 - 1, a: xtemp(ptrSlot), b: xtemp(valSlot), args: [], callee: "", tlabel: idx, flabel: 0 }
+
+// mem[dst] = ((i64*)mem[a])[mem[b]]  — load an element at a variable index.
+mapper xi_aload(dst: Integer, ptrSlot: Integer, idxSlot: Integer) -> XInsn =>
+    XInsn { op: "aload", typ: "i64", dst: dst, a: xtemp(ptrSlot), b: xtemp(idxSlot), args: [], callee: "", tlabel: 0, flabel: 0 }

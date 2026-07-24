@@ -27,6 +27,7 @@ The native backend is being built in stages behind the flag, with the C backend 
 - calls to other integer functions (including recursion and mutual recursion);
 - calls to declared `extern "C"` functions with integer or string-literal arguments (bound from libSystem or the runtime by dyld — see below);
 - string literals, string locals, and string concatenation with `+` (a String value is a pointer plus a length, two registers / two stack slots; concatenation calls the runtime);
+- `Integer[]` arrays: literals, `.len`, and `.data[i]` indexing (a fat pointer `{ data, len, cap }` in three slots; a literal allocates its backing store through the runtime);
 - expressions over integer literals, parameters, locals, `+ - * / %`, comparisons (`== != < <= > >=`), and parentheses.
 
 Locals and parameters get dedicated stack slots (stable across loop iterations); expression temps get fresh slots; branches are resolved in a second pass, and calls follow the AArch64 convention (args in `x0`..`x7`, result in `x0`, `fp`/`lr` saved). The backend lays the functions out and patches every `BL` itself. Anything outside the subset (a string, a non-integer function, an unsupported operator) is reported and refused rather than mis-compiled:
@@ -73,7 +74,8 @@ Supporting a new arch_os is therefore additive: write an `InsnEncoder` for the i
 | String literals (constant pool, passed as pointer + length) | done |
 | String variables and concatenation | done |
 | String parameters and returns (functions over strings) | done |
-| Arrays, structs, interfaces, generics | next |
+| Integer arrays: literals, `.len`, `.data[i]` | done |
+| Structs, interfaces, generics | next |
 | Full language coverage, diffed against the C backend | planned |
 | Self-host: compile the compiler with the native backend | planned |
 | Second target (Linux ELF, x86-64) | planned |
