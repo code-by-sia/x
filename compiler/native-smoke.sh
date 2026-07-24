@@ -118,6 +118,12 @@ XC_OUT="$W" "$XC" --backend native "$W/arr.xi" >/dev/null 2>&1
 arrout=$("$W/arr" 2>/dev/null)
 if [ "$arrout" = "15" ]; then echo "  ✓ array: sum [4,5,6] = 15"; else echo "  ✗ array printed \"$arrout\""; fail=1; fi
 
+# Compound type: construction and field access.
+printf 'type P = { x: Integer, y: Integer }\nextern "C" { producer xstd_put_int(n: Integer) }\nmodule M { entry main(args: String[]) -> Integer { let p = P { x: 20, y: 22 }  xstd_put_int(p.x + p.y)  return 0 } }\n' > "$W/st.xi"
+XC_OUT="$W" "$XC" --backend native "$W/st.xi" >/dev/null 2>&1
+stout=$("$W/st" 2>/dev/null)
+if [ "$stout" = "42" ]; then echo "  ✓ struct: P{20,22}.x + .y = 42"; else echo "  ✗ struct printed \"$stout\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1

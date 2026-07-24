@@ -33,10 +33,12 @@ type PS = {
     resultKind: Integer      // kind of the last expression (0/1/2); extra slots follow resultTemp
 }
 
-// Stack slots a value of `kind` occupies: Integer 1, String 2, array 3.
+// Stack slots a value of `kind` occupies: Integer 1, String 2, array 3, and a
+// compound (kind >= 3, i.e. type index kind-3) its registered width.
 mapper slotWidth(kind: Integer) -> Integer {
     if kind == 1 { return 2 }
     if kind == 2 { return 3 }
+    if kind >= 3 { return ctype_width(kind - 3) }
     return 1
 }
 
@@ -250,6 +252,9 @@ mapper parsePrimary(ps: PS) -> PS {
         let name = psText(ps)
         let p1 = psAdvance(ps)
         if psKind(p1) == 100 { return parseCall(p1, name) }   // '(' -> call
+        if psKind(p1) == 102 and ctype_index(name) >= 0 {     // 'T {' -> compound construction
+            return parsePostfix(parseCompoundLit(ps, ctype_index(name)))
+        }                                                     // else the { belongs to an enclosing form
         let slot = lookupLocal(ps, name)
         if slot < 0 { return psFail(ps) }
         return parsePostfix(psKindResult(p1, slot, lookupKind(ps, name)))
@@ -263,12 +268,41 @@ mapper parsePrimary(ps: PS) -> PS {
     return psFail(ps)
 }
 
-// Postfix on an array value: `.len`, `.cap`, and `.data[i]`.
+// compoundlit := IDENT '{' (field ':' expr (',' ...)*)? '}'
+mapper parseCompoundLit(ps: PS, ti: Integer) -> PS {
+    let base = ps.nextSlot
+    let cur = bumpSlots(psAdvance(psAdvance(ps)), ctype_width(ti))   // reserve slots; past IDENT and '{'
+    while psKind(cur) != 103 and psKind(cur) != 0 {                  // until '}'
+        let fname = psText(cur)
+        let afterName = psAdvance(cur)
+        if psKind(afterName) != 108 { return psFail(afterName) }     // ':'
+        let off = ctype_field_off(ti, fname)
+        if off < 0 { return psFail(cur) }
+        let v = parseExpr(psAdvance(afterName))
+        if not v.ok { return v }
+        let cc = v
+        let j = 0
+        while j < slotWidth(v.resultKind) { cc = psEmit(cc, xi_copy(base + off + j, v.resultTemp + j))  j = j + 1 }
+        cur = cc
+        if psKind(cur) == 106 { cur = psAdvance(cur) }               // ','
+    }
+    if psKind(cur) != 103 { return psFail(cur) }                     // '}'
+    return psKindResult(psAdvance(cur), base, 3 + ti)
+}
+
+// Postfix: array `.len`/`.cap`/`.data[i]`, or a compound field `.name`.
 mapper parsePostfix(ps: PS) -> PS {
     let cur = ps
     while psKind(cur) == 107 {                     // '.'
         let field = psText(psAdvance(cur))
         let after = psAdvance(psAdvance(cur))       // past '.' and the field name
+        if cur.resultKind >= 3 {                    // compound field access
+            let ti = cur.resultKind - 3
+            let off = ctype_field_off(ti, field)
+            if off < 0 { return psFail(cur) }
+            cur = psKindResult(after, cur.resultTemp + off, ctype_field_kind(ti, field))
+        }
+        else {
         if field == "len" { cur = psKindResult(after, cur.resultTemp + 1, 0) }
         else {
             if field == "cap" { cur = psKindResult(after, cur.resultTemp + 2, 0) }
@@ -282,6 +316,7 @@ mapper parsePostfix(ps: PS) -> PS {
                     cur = psEmitAload(psAdvance(idx), ptrSlot, idx.resultTemp)
                 } else { return psFail(cur) }
             }
+        }
         }
     }
     return cur
@@ -532,6 +567,26 @@ mapper lowerFunc(name: String, paramStr: String, retC: String, bodyTokens: Token
     return FuncLower { ok: true, fn: XFunc { name: name, params: names0, paramKinds: pkinds, ret: "i64", blocks: blocks, nTemps: ps.nextSlot, frame: 0 } }
 }
 
+// Register every compound type's field layout (Integer/String/array fields).
+producer registerTypes(prog: Program) {
+    ctype_reset()
+    for t in prog.types {
+        if t.isCompound {
+            let ti = ctype_add(t.name)
+            for fstr in t.fields {                       // "name:ctype"
+                let colon = findChar(fstr, 58)           // ':'
+                let fname = string_slice(fstr, 0, colon)
+                let fctype = string_slice(fstr, colon + 1, string_len(fstr))
+                let fk = 0
+                let fw = 1
+                if fctype == "xc_string_t" { fk = 1  fw = 2 }
+                if fctype.startsWith2("xc_arr_") { fk = 2  fw = 3 }
+                ctype_add_field(ti, fname, fk, fw)
+            }
+        }
+    }
+}
+
 // Record every callee's return kind so calls can size their result.
 producer registerSigs(prog: Program) {
     fnsig_reset()
@@ -552,6 +607,7 @@ producer registerSigs(prog: Program) {
 // Lower the whole program: main (the entry) plus every top-level function. Any
 // function outside the supported subset refuses the native build.
 producer lowerProgram(prog: Program) -> LowerResult {
+    registerTypes(prog)
     registerSigs(prog)
     let funcs0: XFunc[] = []
     let funcs = funcs0

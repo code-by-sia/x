@@ -37,6 +37,13 @@ extern "C" {
     producer fnsig_reset()                                              // clear the return-kind registry
     producer fnsig_add(name: String, retStr: Integer)                   // record a callee's return kind
     mapper   fnsig_ret_str(name: String) -> Integer                     // 1 if the callee returns a String
+    producer ctype_reset()                                              // clear the compound-type registry
+    producer ctype_add(name: String) -> Integer                         // register a compound, return its index
+    producer ctype_add_field(ti: Integer, fname: String, fkind: Integer, fwidth: Integer)
+    mapper   ctype_index(name: String) -> Integer                       // type index, or -1
+    mapper   ctype_width(ti: Integer) -> Integer                        // total slot width
+    mapper   ctype_field_off(ti: Integer, fname: String) -> Integer     // field slot offset, or -1
+    mapper   ctype_field_kind(ti: Integer, fname: String) -> Integer    // field kind (0/1/2)
     producer xcb_write_exec(h: Integer, path: String) -> Integer        // write + chmod +x; 0 = ok
 }
 

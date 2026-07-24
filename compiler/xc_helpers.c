@@ -510,6 +510,41 @@ xc_integer_t fnsig_ret_str(xc_string_t name) {
     return 0;
 }
 
+/* Compound-type registry for the native backend: each type's fields, their kind
+ * (0 Integer, 1 String, 2 array), and their slot offset within the value. */
+#define CT_MAX 1024
+#define CT_FMAX 64
+static xc_string_t ct_name[CT_MAX];
+static int ct_nf[CT_MAX];
+static int ct_width[CT_MAX];
+static xc_string_t ct_fname[CT_MAX][CT_FMAX];
+static int ct_fkind[CT_MAX][CT_FMAX];
+static int ct_foff[CT_MAX][CT_FMAX];
+static int ct_n = 0;
+static int ct_streq(xc_string_t a, xc_string_t b) { return a.len == b.len && memcmp(a.data, b.data, a.len) == 0; }
+void ctype_reset(void) { ct_n = 0; }
+xc_integer_t ctype_add(xc_string_t name) { ct_name[ct_n] = name; ct_nf[ct_n] = 0; ct_width[ct_n] = 0; return (xc_integer_t)(ct_n++); }
+void ctype_add_field(xc_integer_t ti, xc_string_t fname, xc_integer_t fkind, xc_integer_t fwidth) {
+    int t = (int)ti, f = ct_nf[t];
+    ct_fname[t][f] = fname; ct_fkind[t][f] = (int)fkind; ct_foff[t][f] = ct_width[t];
+    ct_width[t] += (int)fwidth; ct_nf[t]++;
+}
+xc_integer_t ctype_index(xc_string_t name) {
+    for (int i = 0; i < ct_n; i++) if (ct_streq(ct_name[i], name)) return i;
+    return -1;
+}
+xc_integer_t ctype_width(xc_integer_t ti) { return ct_width[(int)ti]; }
+xc_integer_t ctype_field_off(xc_integer_t ti, xc_string_t fname) {
+    int t = (int)ti;
+    for (int f = 0; f < ct_nf[t]; f++) if (ct_streq(ct_fname[t][f], fname)) return ct_foff[t][f];
+    return -1;
+}
+xc_integer_t ctype_field_kind(xc_integer_t ti, xc_string_t fname) {
+    int t = (int)ti;
+    for (int f = 0; f < ct_nf[t]; f++) if (ct_streq(ct_fname[t][f], fname)) return ct_fkind[t][f];
+    return 0;
+}
+
 /* Unescape a source string literal (\n \t \r \0 \\ \" ...) — length, and append. */
 xc_integer_t unescapedLen(xc_string_t s) {
     xc_integer_t n = 0;
