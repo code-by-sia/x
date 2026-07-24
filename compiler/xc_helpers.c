@@ -520,10 +520,24 @@ static int ct_width[CT_MAX];
 static xc_string_t ct_fname[CT_MAX][CT_FMAX];
 static int ct_fkind[CT_MAX][CT_FMAX];
 static int ct_foff[CT_MAX][CT_FMAX];
+static int ct_ref[CT_MAX];   /* 1 = class (heap pointer, one slot), 0 = inline compound */
 static int ct_n = 0;
 static int ct_streq(xc_string_t a, xc_string_t b) { return a.len == b.len && memcmp(a.data, b.data, a.len) == 0; }
 void ctype_reset(void) { ct_n = 0; }
-xc_integer_t ctype_add(xc_string_t name) { ct_name[ct_n] = name; ct_nf[ct_n] = 0; ct_width[ct_n] = 0; return (xc_integer_t)(ct_n++); }
+xc_integer_t ctype_add(xc_string_t name, xc_integer_t isRef) { ct_name[ct_n] = name; ct_nf[ct_n] = 0; ct_width[ct_n] = 0; ct_ref[ct_n] = (int)isRef; return (xc_integer_t)(ct_n++); }
+xc_integer_t ctype_is_ref(xc_integer_t ti) { return ct_ref[(int)ti]; }
+xc_string_t  ctype_name(xc_integer_t ti) { return ct_name[(int)ti]; }
+
+/* Interface -> concrete class binding (single bind per interface). */
+#define BIND_MAX 1024
+static xc_string_t bind_iface[BIND_MAX], bind_cls[BIND_MAX];
+static int bind_n = 0;
+void bind_reset(void) { bind_n = 0; }
+void bind_add(xc_string_t iface, xc_string_t cls) { bind_iface[bind_n] = iface; bind_cls[bind_n] = cls; bind_n++; }
+xc_string_t bind_class(xc_string_t iface) {
+    for (int i = 0; i < bind_n; i++) if (ct_streq(bind_iface[i], iface)) return bind_cls[i];
+    return xc_string_from_cstr("");
+}
 void ctype_add_field(xc_integer_t ti, xc_string_t fname, xc_integer_t fkind, xc_integer_t fwidth) {
     int t = (int)ti, f = ct_nf[t];
     ct_fname[t][f] = fname; ct_fkind[t][f] = (int)fkind; ct_foff[t][f] = ct_width[t];

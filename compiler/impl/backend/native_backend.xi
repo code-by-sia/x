@@ -38,7 +38,10 @@ type PS = {
 mapper slotWidth(kind: Integer) -> Integer {
     if kind == 1 { return 2 }
     if kind == 2 { return 3 }
-    if kind >= 3 { return ctype_width(kind - 3) }
+    if kind >= 3 {
+        if ctype_is_ref(kind - 3) == 1 { return 1 }   // a class value is one pointer slot
+        return ctype_width(kind - 3)
+    }
     return 1
 }
 
@@ -154,6 +157,61 @@ mapper bumpSlots(ps: PS, k: Integer) -> PS {
     return PS { toks: ps.toks, pos: ps.pos, insns: ps.insns, nextSlot: ps.nextSlot + k, resultTemp: ps.resultTemp, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultKind: ps.resultKind }
 }
 
+// Module.resolve(Iface): allocate the bound class's zeroed state and produce a
+// class value (the heap pointer). Single bind, so dispatch is static.
+mapper psEmitResolve(ps: PS, ci: Integer) -> PS {
+    let bytes = ctype_width(ci) * 8
+    if bytes == 0 { bytes = 8 }                        // at least one word for a stateless object
+    let c1 = psEmitConst(ps, bytes)
+    let args: Integer[] = []
+    args = appendInt(args, c1.resultTemp)
+    let c2 = psEmitCall(c1, "xstd_alloc", args, c1.nextSlot, false)
+    return psKindResult(c2, c2.resultTemp, 3 + ci)
+}
+mapper parseResolve(ps: PS) -> PS {
+    let p1 = psAdvance(psAdvance(psAdvance(ps)))       // past IDENT, '.', 'resolve'
+    if psKind(p1) != 100 { return psFail(p1) }         // '('
+    let iface = psText(psAdvance(p1))
+    let p2 = psAdvance(psAdvance(p1))                  // past '(' and interface name
+    if psKind(p2) != 101 { return psFail(p2) }         // ')'
+    let ci = ctype_index(bind_class(iface))
+    if ci < 0 { return psFail(p2) }
+    return parsePostfix(psEmitResolve(psAdvance(p2), ci))
+}
+
+// c.method(args): a static call to <Class>_<method> with the object as arg 0.
+mapper parseMethodCall(ps: PS, className: String, method: String, selfSlot: Integer) -> PS {
+    let cur = psAdvance(ps)                            // consume '('
+    let argSlots: Integer[] = []
+    argSlots = appendInt(argSlots, selfSlot)          // `this`
+    if psKind(cur) != 101 {
+        let r = parseOneArg(cur)
+        if not r.ps.ok { return r.ps }
+        cur = r.ps
+        argSlots = concatInts(argSlots, r.slots)
+        while psKind(cur) == 106 {
+            let r2 = parseOneArg(psAdvance(cur))
+            if not r2.ps.ok { return r2.ps }
+            cur = r2.ps
+            argSlots = concatInts(argSlots, r2.slots)
+        }
+    }
+    if psKind(cur) != 101 { return psFail(cur) }       // ')'
+    if intArrLen(argSlots) > 8 { return psFail(cur) }
+    let callee = className + "_" + method
+    let p2 = psAdvance(cur)
+    return psEmitCall(p2, callee, argSlots, p2.nextSlot, fnsig_ret_str(callee) == 1)
+}
+
+// Load a heap field of a class value at a constant slot offset (this.field).
+mapper psEmitAloadc(ps: PS, ptrSlot: Integer, off: Integer, fkind: Integer) -> PS {
+    let t = ps.nextSlot
+    let p = bumpSlots(ps, slotWidth(fkind))
+    let j = 0
+    while j < slotWidth(fkind) { p = psEmit(p, xi_aloadc(t + j, ptrSlot, off + j))  j = j + 1 }
+    return psKindResult(p, t, fkind)
+}
+
 // Load one element: dst = ((Integer*)ptr)[idx]. Result is an Integer.
 mapper psEmitAload(ps: PS, ptrSlot: Integer, idxSlot: Integer) -> PS {
     let t = ps.nextSlot
@@ -248,6 +306,11 @@ mapper parsePrimary(ps: PS) -> PS {
         return psKindResult(psAdvance(a2), ptrSlot, 1)
     }
     if k == 104 { return parseArrayLit(ps) }       // '[' -> array literal
+    if k == 238 {                                  // 'this' (the object pointer, slot 0 of a method)
+        let slot = lookupLocal(ps, "this")
+        if slot < 0 { return psFail(ps) }
+        return parsePostfix(psKindResult(psAdvance(ps), slot, lookupKind(ps, "this")))
+    }
     if k == 1 {
         let name = psText(ps)
         let p1 = psAdvance(ps)
@@ -255,6 +318,7 @@ mapper parsePrimary(ps: PS) -> PS {
         if psKind(p1) == 102 and ctype_index(name) >= 0 {     // 'T {' -> compound construction
             return parsePostfix(parseCompoundLit(ps, ctype_index(name)))
         }                                                     // else the { belongs to an enclosing form
+        if psKind(p1) == 107 and psText(psAdvance(p1)) == "resolve" { return parseResolve(ps) }   // Module.resolve(I)
         let slot = lookupLocal(ps, name)
         if slot < 0 { return psFail(ps) }
         return parsePostfix(psKindResult(p1, slot, lookupKind(ps, name)))
@@ -296,11 +360,17 @@ mapper parsePostfix(ps: PS) -> PS {
     while psKind(cur) == 107 {                     // '.'
         let field = psText(psAdvance(cur))
         let after = psAdvance(psAdvance(cur))       // past '.' and the field name
-        if cur.resultKind >= 3 {                    // compound field access
+        if cur.resultKind >= 3 {                    // compound field, class field, or method
             let ti = cur.resultKind - 3
-            let off = ctype_field_off(ti, field)
-            if off < 0 { return psFail(cur) }
-            cur = psKindResult(after, cur.resultTemp + off, ctype_field_kind(ti, field))
+            if ctype_is_ref(ti) == 1 and psKind(after) == 100 {          // c.method(args)
+                cur = parseMethodCall(after, ctype_name(ti), field, cur.resultTemp)
+                if not cur.ok { return cur }
+            } else {
+                let off = ctype_field_off(ti, field)
+                if off < 0 { return psFail(cur) }
+                if ctype_is_ref(ti) == 1 { cur = psEmitAloadc(after, cur.resultTemp, off, ctype_field_kind(ti, field)) }   // heap field
+                else { cur = psKindResult(after, cur.resultTemp + off, ctype_field_kind(ti, field)) }                       // inline field
+            }
         }
         else {
         if field == "len" { cur = psKindResult(after, cur.resultTemp + 1, 0) }
@@ -464,12 +534,37 @@ mapper parseStmt(ps: PS) -> PS {
     if k == 221 { return parseReturn(ps) }
     if k == 222 { return parseIf(ps) }
     if k == 247 { return parseWhile(ps) }
+    if k == 238 { return parseDotStmt(ps) }                        // this.field = v  or  this.method(...)
     if k == 1 {
-        // IDENT '(' -> a call statement (result discarded); else an assignment.
-        if psKind(psAdvance(ps)) == 100 { return parseCall(psAdvance(ps), psText(ps)) }
+        let p1 = psAdvance(ps)
+        if psKind(p1) == 100 { return parseCall(p1, psText(ps)) }   // f(...) call statement
+        if psKind(p1) == 107 { return parseDotStmt(ps) }            // c.field = v  or  c.method(...)
         return parseAssign(ps)
     }
     return psFail(ps)
+}
+
+// this.field = v (store into a class object), or c.method(...) as a statement.
+mapper parseDotStmt(ps: PS) -> PS {
+    let name = psText(ps)
+    let slot = lookupLocal(ps, name)
+    if slot < 0 { return psFail(ps) }
+    let kind = lookupKind(ps, name)
+    if kind < 3 { return psFail(ps) }                  // must be a class value
+    let ti = kind - 3
+    let pField = psAdvance(psAdvance(ps))              // past IDENT and '.'
+    let field = psText(pField)
+    let pAfter = psAdvance(pField)
+    if psKind(pAfter) == 100 { return parseMethodCall(pAfter, ctype_name(ti), field, slot) }   // c.method()
+    if psKind(pAfter) != 111 { return psFail(pAfter) } // '='
+    let off = ctype_field_off(ti, field)
+    if off < 0 { return psFail(pField) }
+    let v = parseExpr(psAdvance(pAfter))
+    if not v.ok { return v }
+    let cc = v
+    let j = 0
+    while j < slotWidth(v.resultKind) { cc = psEmit(cc, xi_astorec(slot, off + j, v.resultTemp + j))  j = j + 1 }
+    return cc
 }
 
 mapper parseStmts(ps: PS) -> PS {
@@ -567,23 +662,73 @@ mapper lowerFunc(name: String, paramStr: String, retC: String, bodyTokens: Token
     return FuncLower { ok: true, fn: XFunc { name: name, params: names0, paramKinds: pkinds, ret: "i64", blocks: blocks, nTemps: ps.nextSlot, frame: 0 } }
 }
 
-// Register every compound type's field layout (Integer/String/array fields).
+// Lower a class method to <Class>_<method>. `this` (the object pointer) is the
+// first parameter, in slot 0; declared parameters follow. A void method (no
+// return) gets a trailing return so the epilogue runs.
+mapper lowerMethod(className: String, ci: Integer, meth: MethodSpec) -> FuncLower {
+    let retC = meth.retCtype
+    let isVoid = retC != "xc_integer_t" and retC != "xc_string_t"
+    let pp = parseNativeParams(meth.params)
+    if not pp.ok { return FuncLower { ok: false, fn: dummyFn() } }
+    let names0: String[] = []
+    let slots0: Integer[] = []
+    let kinds0: Integer[] = []
+    let pkinds: Integer[] = []
+    names0 = appendString(names0, "this")
+    slots0 = appendInt(slots0, 0)
+    kinds0 = appendInt(kinds0, 3 + ci)     // a class value, for field access
+    pkinds = appendInt(pkinds, 0)          // one register (the pointer)
+    let nslots = 1
+    let nregs = 1
+    let np = stringArrLen(pp.names)
+    let i = 0
+    while i < np {
+        let kd = intArrGet(pp.kinds, i)
+        names0 = appendString(names0, stringArrGet(pp.names, i))
+        slots0 = appendInt(slots0, nslots)
+        kinds0 = appendInt(kinds0, kd)
+        pkinds = appendInt(pkinds, kd)
+        if kd == 1 { nslots = nslots + 2  nregs = nregs + 2 } else { nslots = nslots + 1  nregs = nregs + 1 }
+        i = i + 1
+    }
+    if nregs > 8 { return FuncLower { ok: false, fn: dummyFn() } }
+    let insns0: XInsn[] = []
+    let ps0 = parseStmts(PS { toks: meth.bodyTokens, pos: 0, insns: insns0, nextSlot: nslots, resultTemp: 0, ok: true, names: names0, slots: slots0, nextLabel: 0, lastRet: false, kinds: kinds0, resultKind: 0 })
+    if not ps0.ok { return FuncLower { ok: false, fn: dummyFn() } }
+    let ps = ps0
+    if not ps0.lastRet {
+        if isVoid { ps = psEmit(ps0, xi_ret2(xtemp(0), false)) } else { return FuncLower { ok: false, fn: dummyFn() } }
+    }
+    let blocks0: XBlock[] = []
+    let blocks = appendXBlock(blocks0, XBlock { id: 0, insns: ps.insns })
+    return FuncLower { ok: true, fn: XFunc { name: className + "_" + meth.name, params: names0, paramKinds: pkinds, ret: "i64", blocks: blocks, nTemps: ps.nextSlot, frame: 0 } }
+}
+
+// Add "name:ctype" fields to a registered type, mapping the C type to a kind.
+producer addFields(ti: Integer, fields: String[]) {
+    for fstr in fields {
+        let colon = findChar(fstr, 58)                   // ':'
+        let fname = string_slice(fstr, 0, colon)
+        let fctype = string_slice(fstr, colon + 1, string_len(fstr))
+        let fk = 0
+        let fw = 1
+        if fctype == "xc_string_t" { fk = 1  fw = 2 }
+        if fctype.startsWith2("xc_arr_") { fk = 2  fw = 3 }
+        ctype_add_field(ti, fname, fk, fw)
+    }
+}
+
+// Register compound types (value), classes (heap ref, state layout), and the
+// module's interface->class binds.
 producer registerTypes(prog: Program) {
     ctype_reset()
+    bind_reset()
     for t in prog.types {
-        if t.isCompound {
-            let ti = ctype_add(t.name)
-            for fstr in t.fields {                       // "name:ctype"
-                let colon = findChar(fstr, 58)           // ':'
-                let fname = string_slice(fstr, 0, colon)
-                let fctype = string_slice(fstr, colon + 1, string_len(fstr))
-                let fk = 0
-                let fw = 1
-                if fctype == "xc_string_t" { fk = 1  fw = 2 }
-                if fctype.startsWith2("xc_arr_") { fk = 2  fw = 3 }
-                ctype_add_field(ti, fname, fk, fw)
-            }
-        }
+        if t.isCompound { addFields(ctype_add(t.name, 0), t.fields) }
+    }
+    for c in prog.classes { addFields(ctype_add(c.name, 1), c.stateFields) }
+    for m in prog.modules {
+        for b in m.bindings { bind_add(b.ifaceName, b.concreteName) }
     }
 }
 
@@ -602,6 +747,13 @@ producer registerSigs(prog: Program) {
         if x.retCtype == "xc_string_t" { rs = 1 }
         fnsig_add(x.name, rs)
     }
+    for c in prog.classes {
+        for meth in c.methList {
+            let rs = 0
+            if meth.retCtype == "xc_string_t" { rs = 1 }
+            fnsig_add(c.name + "_" + meth.name, rs)
+        }
+    }
 }
 
 // Lower the whole program: main (the entry) plus every top-level function. Any
@@ -618,6 +770,14 @@ producer lowerProgram(prog: Program) -> LowerResult {
         let lf = lowerFunc(f.name, f.params, f.retCtype, f.bodyTokens, false)
         if not lf.ok { return unsupportedLower() }
         funcs = appendXFunc(funcs, lf.fn)
+    }
+    for c in prog.classes {
+        let ci = ctype_index(c.name)
+        for meth in c.methList {
+            let lf = lowerMethod(c.name, ci, meth)
+            if not lf.ok { return unsupportedLower() }
+            funcs = appendXFunc(funcs, lf.fn)
+        }
     }
     return LowerResult { ok: true, module: XModule { funcs: funcs, externs: [], entry: "main" }, reason: "" }
 }

@@ -108,6 +108,11 @@ mapper emitInsn(ws: Integer[], ins: XInsn, locals: Integer) -> Integer[] {
         let w4 = appendInt(w3, aLdr(11, 9, 0))                // load element
         return appendInt(w4, aStrSp(11, ins.dst * 8))
     }
+    if ins.op == "aloadc" {
+        let w1 = appendInt(ws, aLdrSp(9, ins.a.id * 8))       // object pointer
+        let w2 = appendInt(w1, aLdr(11, 9, ins.tlabel * 8))   // load field at constant offset
+        return appendInt(w2, aStrSp(11, ins.dst * 8))
+    }
     if ins.op == "ret" {
         let w1 = appendInt(ws, aLdrSp(0, ins.a.id * 8))
         let w1b = w1

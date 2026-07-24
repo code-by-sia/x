@@ -149,3 +149,7 @@ mapper xi_astorec(ptrSlot: Integer, idx: Integer, valSlot: Integer) -> XInsn =>
 // mem[dst] = ((i64*)mem[a])[mem[b]]  — load an element at a variable index.
 mapper xi_aload(dst: Integer, ptrSlot: Integer, idxSlot: Integer) -> XInsn =>
     XInsn { op: "aload", typ: "i64", dst: dst, a: xtemp(ptrSlot), b: xtemp(idxSlot), args: [], callee: "", tlabel: 0, flabel: 0 }
+
+// mem[dst] = ((i64*)mem[a])[idx]  — load a field at a constant offset (this.field).
+mapper xi_aloadc(dst: Integer, ptrSlot: Integer, idx: Integer) -> XInsn =>
+    XInsn { op: "aloadc", typ: "i64", dst: dst, a: xtemp(ptrSlot), b: xnone(), args: [], callee: "", tlabel: idx, flabel: 0 }
