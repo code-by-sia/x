@@ -27,8 +27,10 @@ type PS = {
     ok:         Bool,
     names:      String[],
     slots:      Integer[],
+    kinds:      Integer[],   // per local: 1 = String (two slots), 0 = Integer
     nextLabel:  Integer,
-    lastRet:    Bool
+    lastRet:    Bool,
+    resultStr:  Bool         // is the last expression a String? (its len is at resultTemp+1)
 }
 
 mapper psKind(ps: PS) -> Integer {
@@ -37,35 +39,38 @@ mapper psKind(ps: PS) -> Integer {
 }
 mapper psText(ps: PS) -> String { return tokenArrGet(ps.toks, ps.pos).text }
 mapper psAdvance(ps: PS) -> PS {
-    return PS { toks: ps.toks, pos: ps.pos + 1, insns: ps.insns, nextSlot: ps.nextSlot, resultTemp: ps.resultTemp, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet }
+    return PS { toks: ps.toks, pos: ps.pos + 1, insns: ps.insns, nextSlot: ps.nextSlot, resultTemp: ps.resultTemp, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultStr: ps.resultStr }
 }
 mapper psFail(ps: PS) -> PS {
-    return PS { toks: ps.toks, pos: ps.pos, insns: ps.insns, nextSlot: ps.nextSlot, resultTemp: ps.resultTemp, ok: false, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet }
+    return PS { toks: ps.toks, pos: ps.pos, insns: ps.insns, nextSlot: ps.nextSlot, resultTemp: ps.resultTemp, ok: false, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultStr: ps.resultStr }
 }
 mapper psEmit(ps: PS, insn: XInsn) -> PS {
-    return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, insn), nextSlot: ps.nextSlot, resultTemp: ps.resultTemp, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: false }
+    return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, insn), nextSlot: ps.nextSlot, resultTemp: ps.resultTemp, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: false, kinds: ps.kinds, resultStr: ps.resultStr }
 }
 mapper psResult(ps: PS, slot: Integer) -> PS {
-    return PS { toks: ps.toks, pos: ps.pos, insns: ps.insns, nextSlot: ps.nextSlot, resultTemp: slot, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet }
+    return PS { toks: ps.toks, pos: ps.pos, insns: ps.insns, nextSlot: ps.nextSlot, resultTemp: slot, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultStr: ps.resultStr }
 }
 mapper withNextLabel(ps: PS, n: Integer) -> PS {
-    return PS { toks: ps.toks, pos: ps.pos, insns: ps.insns, nextSlot: ps.nextSlot, resultTemp: ps.resultTemp, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: n, lastRet: ps.lastRet }
+    return PS { toks: ps.toks, pos: ps.pos, insns: ps.insns, nextSlot: ps.nextSlot, resultTemp: ps.resultTemp, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: n, lastRet: ps.lastRet, kinds: ps.kinds, resultStr: ps.resultStr }
 }
 mapper psEmitConst(ps: PS, v: Integer) -> PS {
     let t = ps.nextSlot
-    return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_const(t, v)), nextSlot: t + 1, resultTemp: t, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet }
+    return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_const(t, v)), nextSlot: t + 1, resultTemp: t, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultStr: false }
 }
 mapper psEmitBin(ps: PS, op: String, a: Integer, b: Integer) -> PS {
     let t = ps.nextSlot
-    return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_bin(op, t, xtemp(a), xtemp(b))), nextSlot: t + 1, resultTemp: t, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet }
+    return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_bin(op, t, xtemp(a), xtemp(b))), nextSlot: t + 1, resultTemp: t, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultStr: false }
 }
 mapper psEmitCmp(ps: PS, op: String, a: Integer, b: Integer) -> PS {
     let t = ps.nextSlot
-    return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_cmp(op, t, a, b)), nextSlot: t + 1, resultTemp: t, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet }
+    return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_cmp(op, t, a, b)), nextSlot: t + 1, resultTemp: t, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultStr: false }
 }
-mapper declareLocal(ps: PS, name: String) -> PS {
+// Declare a local. A String local (kind 1) reserves two slots (pointer, length).
+mapper declareLocal(ps: PS, name: String, kind: Integer) -> PS {
     let slot = ps.nextSlot
-    return PS { toks: ps.toks, pos: ps.pos, insns: ps.insns, nextSlot: slot + 1, resultTemp: ps.resultTemp, ok: ps.ok, names: appendString(ps.names, name), slots: appendInt(ps.slots, slot), nextLabel: ps.nextLabel, lastRet: ps.lastRet }
+    let ns = slot + 1
+    if kind == 1 { ns = slot + 2 }
+    return PS { toks: ps.toks, pos: ps.pos, insns: ps.insns, nextSlot: ns, resultTemp: ps.resultTemp, ok: ps.ok, names: appendString(ps.names, name), slots: appendInt(ps.slots, slot), nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: appendInt(ps.kinds, kind), resultStr: ps.resultStr }
 }
 mapper lookupLocal(ps: PS, name: String) -> Integer {
     let i = 0
@@ -75,6 +80,19 @@ mapper lookupLocal(ps: PS, name: String) -> Integer {
         i = i + 1
     }
     return 0 - 1
+}
+mapper lookupKind(ps: PS, name: String) -> Integer {
+    let i = 0
+    let n = stringArrLen(ps.names)
+    while i < n {
+        if stringArrGet(ps.names, i) == name { return intArrGet(ps.kinds, i) }
+        i = i + 1
+    }
+    return 0
+}
+// Set the result to `slot` and mark whether it is a String.
+mapper psStrResult(ps: PS, slot: Integer, isStr: Bool) -> PS {
+    return PS { toks: ps.toks, pos: ps.pos, insns: ps.insns, nextSlot: ps.nextSlot, resultTemp: slot, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultStr: isStr }
 }
 mapper cmpOpOf(k: Integer) -> String {
     if k == 112 { return "eq" }
@@ -93,13 +111,17 @@ mapper slotsToVals(slots: Integer[]) -> XVal[] {
     while i < n { out = appendXVal(out, xtemp(intArrGet(slots, i)))  i = i + 1 }
     return out
 }
-mapper psEmitCall(ps: PS, callee: String, argSlots: Integer[], dst: Integer) -> PS {
-    return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_call(dst, callee, slotsToVals(argSlots), "i64")), nextSlot: dst + 1, resultTemp: dst, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet }
+// Emit a call. A String result (retStr) comes back in x0:x1 and takes two slots.
+mapper psEmitCall(ps: PS, callee: String, argSlots: Integer[], dst: Integer, retStr: Bool) -> PS {
+    let typ = "i64"
+    let ns = dst + 1
+    if retStr { typ = "str"  ns = dst + 2 }
+    return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_call(dst, callee, slotsToVals(argSlots), typ)), nextSlot: ns, resultTemp: dst, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultStr: retStr }
 }
 
 mapper psEmitStrAddr(ps: PS, strid: Integer) -> PS {
     let t = ps.nextSlot
-    return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_straddr(t, strid)), nextSlot: t + 1, resultTemp: t, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet }
+    return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_straddr(t, strid)), nextSlot: t + 1, resultTemp: t, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultStr: true }
 }
 mapper concatInts(a: Integer[], b: Integer[]) -> Integer[] {
     let out = a
@@ -108,23 +130,26 @@ mapper concatInts(a: Integer[], b: Integer[]) -> Integer[] {
     return out
 }
 
-// One argument: a string literal (which occupies two registers, ptr + len) or
-// an integer expression. Returns the updated state and the slot(s) it produced.
+// A concatenation a + b (both String) is a call to the runtime, result in two
+// slots (pointer + length).
+mapper psEmitConcat(ps: PS, a: Integer, b: Integer) -> PS {
+    let args: Integer[] = []
+    args = appendInt(args, a)
+    args = appendInt(args, a + 1)
+    args = appendInt(args, b)
+    args = appendInt(args, b + 1)
+    return psEmitCall(ps, "xstd_concat", args, ps.nextSlot, true)
+}
+
+// One call argument: its value slot, plus a second slot (the length) if String.
 type ArgResult = { ps: PS, slots: Integer[] }
 mapper parseOneArg(ps: PS) -> ArgResult {
-    if psKind(ps) == 4 {                          // string literal
-        let ptrSlot = ps.nextSlot
-        let a1 = psEmitStrAddr(ps, strpool_add(psText(ps)))
-        let lenSlot = a1.nextSlot
-        let a2 = psAdvance(psEmitConst(a1, unescapedLen(psText(ps))))
-        let sl: Integer[] = []
-        sl = appendInt(sl, ptrSlot)
-        sl = appendInt(sl, lenSlot)
-        return ArgResult { ps: a2, slots: sl }
-    }
     let e = parseExpr(ps)
     let sl: Integer[] = []
-    if e.ok { sl = appendInt(sl, e.resultTemp) }
+    if e.ok {
+        sl = appendInt(sl, e.resultTemp)
+        if e.resultStr { sl = appendInt(sl, e.resultTemp + 1) }
+    }
     return ArgResult { ps: e, slots: sl }
 }
 
@@ -147,20 +172,26 @@ mapper parseCall(ps: PS, name: String) -> PS {
     if psKind(cur) != 101 { return psFail(cur) }  // ')'
     if intArrLen(argSlots) > 8 { return psFail(cur) }
     let p2 = psAdvance(cur)
-    return psEmitCall(p2, name, argSlots, p2.nextSlot)
+    return psEmitCall(p2, name, argSlots, p2.nextSlot, false)
 }
 
-// primary := INT | IDENT | call | '(' expr ')'
+// primary := INT | STRING | IDENT | call | '(' expr ')'
 mapper parsePrimary(ps: PS) -> PS {
     let k = psKind(ps)
     if k == 2 { return psEmitConst(psAdvance(ps), digitsToInt(psText(ps))) }
+    if k == 4 {                                    // string literal -> pointer + length
+        let ptrSlot = ps.nextSlot
+        let a1 = psEmitStrAddr(ps, strpool_add(psText(ps)))
+        let a2 = psEmitConst(a1, unescapedLen(psText(ps)))   // length at ptrSlot+1
+        return psStrResult(psAdvance(a2), ptrSlot, true)
+    }
     if k == 1 {
         let name = psText(ps)
         let p1 = psAdvance(ps)
         if psKind(p1) == 100 { return parseCall(p1, name) }   // '(' -> call
         let slot = lookupLocal(ps, name)
         if slot < 0 { return psFail(ps) }
-        return psResult(p1, slot)
+        return psStrResult(p1, slot, lookupKind(ps, name) == 1)
     }
     if k == 100 {
         let inner = parseExpr(psAdvance(ps))
@@ -192,12 +223,18 @@ mapper parseAdd(ps: PS) -> PS {
     let cur = parseMul(ps)
     if not cur.ok { return cur }
     while (psKind(cur) == 118) or (psKind(cur) == 119) {
-        let op = "add"
-        if psKind(cur) == 119 { op = "sub" }
+        let isAdd = psKind(cur) == 118
+        let leftStr = cur.resultStr
         let left = cur.resultTemp
         let rhs = parseMul(psAdvance(cur))
         if not rhs.ok { return rhs }
-        cur = psEmitBin(rhs, op, left, rhs.resultTemp)
+        if isAdd and leftStr and rhs.resultStr {
+            cur = psEmitConcat(rhs, left, rhs.resultTemp)   // String + String
+        } else {
+            let op = "add"
+            if not isAdd { op = "sub" }
+            cur = psEmitBin(rhs, op, left, rhs.resultTemp)
+        }
     }
     return cur
 }
@@ -237,25 +274,33 @@ mapper parseLet(ps: PS) -> PS {
     let p3 = parseExpr(psAdvance(p2))
     if not p3.ok { return p3 }
     let vslot = p3.resultTemp
+    let kind = 0
+    if p3.resultStr { kind = 1 }
     let sx = p3.nextSlot
-    return psEmit(declareLocal(p3, name), xi_copy(sx, vslot))
+    let c1 = psEmit(declareLocal(p3, name, kind), xi_copy(sx, vslot))
+    if kind == 1 { return psEmit(c1, xi_copy(sx + 1, vslot + 1)) }   // String: copy length too
+    return c1
 }
 
 mapper parseAssign(ps: PS) -> PS {
-    let slot = lookupLocal(ps, psText(ps))
+    let name = psText(ps)
+    let slot = lookupLocal(ps, name)
     if slot < 0 { return psFail(ps) }
+    let isStr = lookupKind(ps, name) == 1
     let p1 = psAdvance(ps)
     if psKind(p1) != 111 { return psFail(p1) }   // '='
     let p2 = parseExpr(psAdvance(p1))
     if not p2.ok { return p2 }
-    return psEmit(p2, xi_copy(slot, p2.resultTemp))
+    let c1 = psEmit(p2, xi_copy(slot, p2.resultTemp))
+    if isStr { return psEmit(c1, xi_copy(slot + 1, p2.resultTemp + 1)) }
+    return c1
 }
 
 mapper parseReturn(ps: PS) -> PS {
     let p1 = parseExpr(psAdvance(ps))
     if not p1.ok { return p1 }
     let p2 = psEmit(p1, xi_ret(xtemp(p1.resultTemp)))
-    return PS { toks: p2.toks, pos: p2.pos, insns: p2.insns, nextSlot: p2.nextSlot, resultTemp: p2.resultTemp, ok: p2.ok, names: p2.names, slots: p2.slots, nextLabel: p2.nextLabel, lastRet: true }
+    return PS { toks: p2.toks, pos: p2.pos, insns: p2.insns, nextSlot: p2.nextSlot, resultTemp: p2.resultTemp, ok: p2.ok, names: p2.names, slots: p2.slots, nextLabel: p2.nextLabel, lastRet: true, kinds: p2.kinds, resultStr: p2.resultStr }
 }
 
 // if cond { then } [ else { else } ]
@@ -364,6 +409,7 @@ mapper lowerFunc(name: String, paramStr: String, retC: String, bodyTokens: Token
     if retC != "xc_integer_t" { return FuncLower { ok: false, fn: dummyFn() } }
     let names0: String[] = []
     let slots0: Integer[] = []
+    let kinds0: Integer[] = []
     let np = 0
     if not isEntry {
         let pp = parseIntParams(paramStr)
@@ -372,10 +418,10 @@ mapper lowerFunc(name: String, paramStr: String, retC: String, bodyTokens: Token
         np = stringArrLen(pp.names)
         if np > 8 { return FuncLower { ok: false, fn: dummyFn() } }
         let i = 0
-        while i < np { slots0 = appendInt(slots0, i)  i = i + 1 }
+        while i < np { slots0 = appendInt(slots0, i)  kinds0 = appendInt(kinds0, 0)  i = i + 1 }
     }
     let insns0: XInsn[] = []
-    let ps = parseStmts(PS { toks: bodyTokens, pos: 0, insns: insns0, nextSlot: np, resultTemp: 0, ok: true, names: names0, slots: slots0, nextLabel: 0, lastRet: false })
+    let ps = parseStmts(PS { toks: bodyTokens, pos: 0, insns: insns0, nextSlot: np, resultTemp: 0, ok: true, names: names0, slots: slots0, nextLabel: 0, lastRet: false, kinds: kinds0, resultStr: false })
     if not ps.ok { return FuncLower { ok: false, fn: dummyFn() } }
     if not ps.lastRet { return FuncLower { ok: false, fn: dummyFn() } }
     let blocks0: XBlock[] = []
@@ -412,6 +458,7 @@ producer compileNative(diag: Diagnostics, host: Host, enc: InsnEncoder, obj: Obj
     let efs: EncodedFunc[] = []
     for f in m.funcs { efs = appendEncodedFunc(efs, enc.encode(f)) }
     let externNames: String[] = []
+    externNames = appendString(externNames, "xstd_concat")   // runtime string concat
     for x in prog.externs { externNames = appendString(externNames, x.name) }
     let lk = linkModule(EncodedModule { funcs: efs, entry: m.entry }, externNames)
     if not lk.ok {

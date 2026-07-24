@@ -1028,6 +1028,7 @@ xc_integer_t xstd_uptime_ms(void) {
 void         xstd_mark_start(void)      { xw_started_ms = xstd_now_nanos() / 1000000; }
 void         xstd_put_int(xc_integer_t n) { printf("%lld\n", (long long)n); }
 void         xstd_put_str(xc_string_t s) { fwrite(s.data, 1, s.len, stdout); }
+xc_string_t  xstd_concat(xc_string_t a, xc_string_t b) { return xc_string_concat(a, b); }
 xc_integer_t xstd_request_count(void)   { return xw_request_count; }
 
 xc_integer_t xstd_now_nanos(void) {

@@ -190,7 +190,8 @@ mapper encodeArm64(f: XFunc) -> EncResult {
                             cSites = appendInt(cSites, intArrLen(ws))
                             cSyms = appendString(cSyms, ins.callee)
                             ws = appendInt(ws, 0)                       // bl placeholder
-                            ws = appendInt(ws, aStrSp(0, ins.dst * 8))  // store result
+                            ws = appendInt(ws, aStrSp(0, ins.dst * 8))  // store x0
+                            if ins.typ == "str" { ws = appendInt(ws, aStrSp(1, (ins.dst + 1) * 8)) }   // string: also x1 (len)
                         } else {
                             ws = emitInsn(ws, ins, locals)
                         }
