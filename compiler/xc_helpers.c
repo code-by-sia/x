@@ -492,6 +492,24 @@ xc_integer_t strpool_add(xc_string_t s) { g_strpool[g_strpool_n] = s; return (xc
 xc_integer_t strpool_len(void) { return (xc_integer_t)g_strpool_n; }
 xc_string_t  strpool_get(xc_integer_t i) { return g_strpool[i]; }
 
+/* Function/extern return-kind registry: 1 if the callee returns a String, so a
+ * call site can size its result (x0 vs x0:x1). Names are interned by the parsed
+ * program and outlive the compile. */
+static xc_string_t g_fnsig_name[8192];
+static int g_fnsig_ret[8192];
+static int g_fnsig_n = 0;
+void fnsig_reset(void) { g_fnsig_n = 0; }
+void fnsig_add(xc_string_t name, xc_integer_t retStr) {
+    g_fnsig_name[g_fnsig_n] = name; g_fnsig_ret[g_fnsig_n] = (int)retStr; g_fnsig_n++;
+}
+xc_integer_t fnsig_ret_str(xc_string_t name) {
+    for (int i = g_fnsig_n - 1; i >= 0; i--) {
+        if (g_fnsig_name[i].len == name.len && memcmp(g_fnsig_name[i].data, name.data, name.len) == 0)
+            return g_fnsig_ret[i];
+    }
+    return 0;
+}
+
 /* Unescape a source string literal (\n \t \r \0 \\ \" ...) — length, and append. */
 xc_integer_t unescapedLen(xc_string_t s) {
     xc_integer_t n = 0;

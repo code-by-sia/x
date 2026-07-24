@@ -172,7 +172,7 @@ mapper parseCall(ps: PS, name: String) -> PS {
     if psKind(cur) != 101 { return psFail(cur) }  // ')'
     if intArrLen(argSlots) > 8 { return psFail(cur) }
     let p2 = psAdvance(cur)
-    return psEmitCall(p2, name, argSlots, p2.nextSlot, false)
+    return psEmitCall(p2, name, argSlots, p2.nextSlot, fnsig_ret_str(name) == 1)
 }
 
 // primary := INT | STRING | IDENT | call | '(' expr ')'
@@ -299,7 +299,7 @@ mapper parseAssign(ps: PS) -> PS {
 mapper parseReturn(ps: PS) -> PS {
     let p1 = parseExpr(psAdvance(ps))
     if not p1.ok { return p1 }
-    let p2 = psEmit(p1, xi_ret(xtemp(p1.resultTemp)))
+    let p2 = psEmit(p1, xi_ret2(xtemp(p1.resultTemp), p1.resultStr))
     return PS { toks: p2.toks, pos: p2.pos, insns: p2.insns, nextSlot: p2.nextSlot, resultTemp: p2.resultTemp, ok: p2.ok, names: p2.names, slots: p2.slots, nextLabel: p2.nextLabel, lastRet: true, kinds: p2.kinds, resultStr: p2.resultStr }
 }
 
@@ -361,11 +361,11 @@ mapper parseStmts(ps: PS) -> PS {
 }
 
 mapper unsupportedLower() -> LowerResult {
-    return LowerResult { ok: false, module: emptyXModule(), reason: "the native backend supports integer functions of let, assignment, return, if/else, while and calls over int literals, params, locals, + - * / %, comparisons and parentheses; every function must return Integer and end in a return" }
+    return LowerResult { ok: false, module: emptyXModule(), reason: "the native backend supports Integer/String functions of let, assignment, return, if/else, while and calls over literals, params, locals, + - * / %, comparisons, string concatenation and parentheses; every function must end in a return" }
 }
 
 type FuncLower = { ok: Bool, fn: XFunc }
-type ParamParse = { ok: Bool, names: String[] }
+type ParamParse = { ok: Bool, names: String[], kinds: Integer[] }
 
 mapper trimStr(s: String) -> String {
     let n = string_len(s)
@@ -376,62 +376,96 @@ mapper trimStr(s: String) -> String {
     return string_slice(s, a, b)
 }
 
-// Parse a C parameter list "xc_integer_t a, xc_integer_t b" into names; not-ok if
-// any parameter is not an Integer (the only type the backend handles).
-mapper parseIntParams(pstr: String) -> ParamParse {
+// Parse a C parameter list into names + kinds (0 = Integer, 1 = String); not-ok
+// if any parameter is neither.
+mapper parseNativeParams(pstr: String) -> ParamParse {
     let names: String[] = []
-    if string_len(trimStr(pstr)) == 0 { return ParamParse { ok: true, names: names } }
+    let kinds: Integer[] = []
+    if string_len(trimStr(pstr)) == 0 { return ParamParse { ok: true, names: names, kinds: kinds } }
     let n = string_len(pstr)
     let start = 0
     let i = 0
     while i <= n {
         if i == n or string_char_at(pstr, i) == 44 {          // ',' or end
             let piece = trimStr(string_slice(pstr, start, i))
-            if not piece.startsWith2("xc_integer_t ") { return ParamParse { ok: false, names: names } }
-            let name = trimStr(string_slice(piece, 13, string_len(piece)))
-            if string_len(name) == 0 { return ParamParse { ok: false, names: names } }
+            let kind = 0 - 1
+            let off = 0
+            if piece.startsWith2("xc_integer_t ") { kind = 0  off = 13 }
+            if piece.startsWith2("xc_string_t ")  { kind = 1  off = 12 }
+            if kind < 0 { return ParamParse { ok: false, names: names, kinds: kinds } }
+            let name = trimStr(string_slice(piece, off, string_len(piece)))
+            if string_len(name) == 0 { return ParamParse { ok: false, names: names, kinds: kinds } }
             names = appendString(names, name)
+            kinds = appendInt(kinds, kind)
             start = i + 1
         }
         i = i + 1
     }
-    return ParamParse { ok: true, names: names }
+    return ParamParse { ok: true, names: names, kinds: kinds }
 }
 
 mapper dummyFn() -> XFunc {
     let b0: XBlock[] = []
-    return XFunc { name: "", params: [], ret: "i64", blocks: b0, nTemps: 0, frame: 0 }
+    let e0: Integer[] = []
+    return XFunc { name: "", params: [], paramKinds: e0, ret: "i64", blocks: b0, nTemps: 0, frame: 0 }
 }
 
 // Lower one function body. The entry ignores its params (called by the loader);
-// others bind params to the first slots and spill them in the prologue.
+// others bind params to the first slots (a String param takes two) and spill
+// them in the prologue. Integer and String returns are both allowed.
 mapper lowerFunc(name: String, paramStr: String, retC: String, bodyTokens: Token[], isEntry: Bool) -> FuncLower {
-    if retC != "xc_integer_t" { return FuncLower { ok: false, fn: dummyFn() } }
+    if retC != "xc_integer_t" and retC != "xc_string_t" { return FuncLower { ok: false, fn: dummyFn() } }
     let names0: String[] = []
     let slots0: Integer[] = []
     let kinds0: Integer[] = []
-    let np = 0
+    let pkinds: Integer[] = []
+    let nslots = 0
+    let nregs = 0
     if not isEntry {
-        let pp = parseIntParams(paramStr)
+        let pp = parseNativeParams(paramStr)
         if not pp.ok { return FuncLower { ok: false, fn: dummyFn() } }
         names0 = pp.names
-        np = stringArrLen(pp.names)
-        if np > 8 { return FuncLower { ok: false, fn: dummyFn() } }
+        pkinds = pp.kinds
+        let np = stringArrLen(pp.names)
         let i = 0
-        while i < np { slots0 = appendInt(slots0, i)  kinds0 = appendInt(kinds0, 0)  i = i + 1 }
+        while i < np {
+            let kind = intArrGet(pp.kinds, i)
+            slots0 = appendInt(slots0, nslots)
+            kinds0 = appendInt(kinds0, kind)
+            if kind == 1 { nslots = nslots + 2  nregs = nregs + 2 } else { nslots = nslots + 1  nregs = nregs + 1 }
+            i = i + 1
+        }
+        if nregs > 8 { return FuncLower { ok: false, fn: dummyFn() } }
     }
     let insns0: XInsn[] = []
-    let ps = parseStmts(PS { toks: bodyTokens, pos: 0, insns: insns0, nextSlot: np, resultTemp: 0, ok: true, names: names0, slots: slots0, nextLabel: 0, lastRet: false, kinds: kinds0, resultStr: false })
+    let ps = parseStmts(PS { toks: bodyTokens, pos: 0, insns: insns0, nextSlot: nslots, resultTemp: 0, ok: true, names: names0, slots: slots0, nextLabel: 0, lastRet: false, kinds: kinds0, resultStr: false })
     if not ps.ok { return FuncLower { ok: false, fn: dummyFn() } }
     if not ps.lastRet { return FuncLower { ok: false, fn: dummyFn() } }
     let blocks0: XBlock[] = []
     let blocks = appendXBlock(blocks0, XBlock { id: 0, insns: ps.insns })
-    return FuncLower { ok: true, fn: XFunc { name: name, params: names0, ret: "i64", blocks: blocks, nTemps: ps.nextSlot, frame: 0 } }
+    return FuncLower { ok: true, fn: XFunc { name: name, params: names0, paramKinds: pkinds, ret: "i64", blocks: blocks, nTemps: ps.nextSlot, frame: 0 } }
+}
+
+// Record every callee's return kind so calls can size their result.
+producer registerSigs(prog: Program) {
+    fnsig_reset()
+    fnsig_add("xstd_concat", 1)
+    for f in prog.functions {
+        let rs = 0
+        if f.retCtype == "xc_string_t" { rs = 1 }
+        fnsig_add(f.name, rs)
+    }
+    for x in prog.externs {
+        let rs = 0
+        if x.retCtype == "xc_string_t" { rs = 1 }
+        fnsig_add(x.name, rs)
+    }
 }
 
 // Lower the whole program: main (the entry) plus every top-level function. Any
 // function outside the supported subset refuses the native build.
-mapper lowerProgram(prog: Program) -> LowerResult {
+producer lowerProgram(prog: Program) -> LowerResult {
+    registerSigs(prog)
     let funcs0: XFunc[] = []
     let funcs = funcs0
     let lm = lowerFunc("main", "", prog.entrySpec.retCtype, prog.entrySpec.bodyTokens, true)

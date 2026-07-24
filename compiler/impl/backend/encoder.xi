@@ -96,8 +96,10 @@ mapper emitInsn(ws: Integer[], ins: XInsn, locals: Integer) -> Integer[] {
     }
     if ins.op == "ret" {
         let w1 = appendInt(ws, aLdrSp(0, ins.a.id * 8))
-        let w2 = w1
-        if locals > 0 { w2 = appendInt(w1, aAddSp(locals)) }
+        let w1b = w1
+        if ins.typ == "str" { w1b = appendInt(w1, aLdrSp(1, (ins.a.id + 1) * 8)) }   // String: also x1
+        let w2 = w1b
+        if locals > 0 { w2 = appendInt(w1b, aAddSp(locals)) }
         let w3 = appendInt(w2, 2831252477)                // ldp x29,x30,[sp],#16
         return appendInt(w3, 3596551104)                  // ret
     }
@@ -141,9 +143,20 @@ mapper encodeArm64(f: XFunc) -> EncResult {
     let ws: Integer[] = []
     ws = appendInt(ws, 2847898621)                        // stp x29,x30,[sp,#-16]!
     if locals > 0 { ws = appendInt(ws, aSubSp(locals)) }
-    let np = stringArrLen(f.params)
+    let np = stringArrLen(f.params)                                        // spill params to slots
+    let preg = 0
+    let pslot = 0
     let pi = 0
-    while pi < np { ws = appendInt(ws, aStrSp(pi, pi * 8))  pi = pi + 1 }   // spill args x0..x7
+    while pi < np {
+        ws = appendInt(ws, aStrSp(preg, pslot * 8))
+        if intArrGet(f.paramKinds, pi) == 1 {                              // String: two registers
+            ws = appendInt(ws, aStrSp(preg + 1, (pslot + 1) * 8))
+            preg = preg + 2  pslot = pslot + 2
+        } else {
+            preg = preg + 1  pslot = pslot + 1
+        }
+        pi = pi + 1
+    }
 
     let fWord: Integer[] = []
     let fTarget: Integer[] = []

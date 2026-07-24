@@ -106,6 +106,12 @@ XC_OUT="$W" "$XC" --backend native "$W/cat.xi" >/dev/null 2>&1
 catout=$("$W/cat" 2>/dev/null)
 if [ "$catout" = "foobar" ]; then echo "  ✓ string concat: foobar"; else echo "  ✗ concat printed \"$catout\""; fail=1; fi
 
+# String parameter + String return.
+printf 'extern "C" { producer xstd_put_str(s: String) }\nmapper greet(name: String) -> String { return "hi " + name }\nmodule M { entry main(args: String[]) -> Integer { xstd_put_str(greet("bob"))  return 0 } }\n' > "$W/fn.xi"
+XC_OUT="$W" "$XC" --backend native "$W/fn.xi" >/dev/null 2>&1
+fnout=$("$W/fn" 2>/dev/null)
+if [ "$fnout" = "hi bob" ]; then echo "  ✓ string fn: greet(\"bob\")"; else echo "  ✗ string fn printed \"$fnout\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1

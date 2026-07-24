@@ -20,7 +20,7 @@ The runtime is not rewritten for this. A prebuilt runtime object ships per platf
 
 ## Current scope
 
-The native backend is being built in stages behind the flag, with the C backend as the untouched default the whole way. Today it compiles integer functions: `main` plus any top-level function whose parameters and return are `Integer`. A body may use:
+The native backend is being built in stages behind the flag, with the C backend as the untouched default the whole way. Today it compiles `Integer`- and `String`-typed functions: `main` plus any top-level function whose parameters and return are `Integer` or `String`. A body may use:
 
 - `let` bindings, assignment, and `return`;
 - `if` / `else` and `while`;
@@ -72,6 +72,7 @@ Supporting a new arch_os is therefore additive: write an `InsnEncoder` for the i
 | Link the runtime (`xstd_*` bound from runtime.dylib) | done |
 | String literals (constant pool, passed as pointer + length) | done |
 | String variables and concatenation | done |
+| String parameters and returns (functions over strings) | done |
 | Arrays, structs, interfaces, generics | next |
 | Full language coverage, diffed against the C backend | planned |
 | Self-host: compile the compiler with the native backend | planned |

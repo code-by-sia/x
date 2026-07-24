@@ -34,6 +34,9 @@ extern "C" {
     mapper   strpool_add(s: String) -> Integer                          // add a raw literal, return its id
     mapper   strpool_len() -> Integer
     mapper   strpool_get(i: Integer) -> String
+    producer fnsig_reset()                                              // clear the return-kind registry
+    producer fnsig_add(name: String, retStr: Integer)                   // record a callee's return kind
+    mapper   fnsig_ret_str(name: String) -> Integer                     // 1 if the callee returns a String
     producer xcb_write_exec(h: Integer, path: String) -> Integer        // write + chmod +x; 0 = ok
 }
 

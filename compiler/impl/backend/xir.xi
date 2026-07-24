@@ -76,12 +76,13 @@ type XBlock = { id: Integer, insns: XInsn[] }
 // `nTemps` is how many temp ids were handed out; `frame` is the stack-slot byte
 // count reserved for allocas (filled in during lowering).
 type XFunc = {
-    name:   String,
-    params: String[],
-    ret:    String,
-    blocks: XBlock[],
-    nTemps: Integer,
-    frame:  Integer
+    name:       String,
+    params:     String[],
+    paramKinds: Integer[],   // per param: 1 = String (two registers/slots), 0 = Integer
+    ret:        String,
+    blocks:     XBlock[],
+    nTemps:     Integer,
+    frame:      Integer
 }
 
 // A whole compilation unit. `externs` are symbols referenced but defined
@@ -104,6 +105,13 @@ mapper xi_bin(op: String, dst: Integer, a: XVal, b: XVal) -> XInsn =>
 
 mapper xi_ret(a: XVal) -> XInsn =>
     XInsn { op: "ret", typ: "void", dst: 0 - 1, a: a, b: xnone(), args: [], callee: "", tlabel: 0, flabel: 0 }
+
+// A return whose value is a String is marked so the epilogue loads x0 and x1.
+mapper xi_ret2(a: XVal, isStr: Bool) -> XInsn {
+    let t = "i64"
+    if isStr { t = "str" }
+    return XInsn { op: "ret", typ: t, dst: 0 - 1, a: a, b: xnone(), args: [], callee: "", tlabel: 0, flabel: 0 }
+}
 
 mapper xi_call(dst: Integer, callee: String, args: XVal[], typ: String) -> XInsn =>
     XInsn { op: "call", typ: typ, dst: dst, a: xnone(), b: xnone(), args: args, callee: callee, tlabel: 0, flabel: 0 }
