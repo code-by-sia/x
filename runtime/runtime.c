@@ -1030,6 +1030,10 @@ void         xstd_put_int(xc_integer_t n) { printf("%lld\n", (long long)n); }
 void         xstd_put_str(xc_string_t s) { fwrite(s.data, 1, s.len, stdout); }
 xc_string_t  xstd_concat(xc_string_t a, xc_string_t b) { return xc_string_concat(a, b); }
 xc_integer_t xstd_alloc(xc_integer_t n) { return (xc_integer_t)(intptr_t)calloc(1, (size_t)n); }
+/* Native-backend singleton cache: instance pointers by index (0 = not built). */
+static void* xw_singletons[8192];
+xc_integer_t xstd_singleton_get(xc_integer_t i) { return (xc_integer_t)(intptr_t)xw_singletons[(size_t)i]; }
+void         xstd_singleton_set(xc_integer_t i, xc_integer_t p) { xw_singletons[(size_t)i] = (void*)(intptr_t)p; }
 xc_integer_t xstd_request_count(void)   { return xw_request_count; }
 
 xc_integer_t xstd_now_nanos(void) {

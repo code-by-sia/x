@@ -538,6 +538,22 @@ xc_string_t bind_class(xc_string_t iface) {
     for (int i = 0; i < bind_n; i++) if (ct_streq(bind_iface[i], iface)) return bind_cls[i];
     return xc_string_from_cstr("");
 }
+
+/* Singleton classes: each shares one cached instance (indexed into the runtime
+ * singleton table). */
+#define SING_MAX 4096
+static xc_string_t sing_name[SING_MAX];
+static int sing_n = 0;
+void sing_reset(void) { sing_n = 0; }
+xc_integer_t sing_index(xc_string_t cls) {
+    for (int i = 0; i < sing_n; i++) if (ct_streq(sing_name[i], cls)) return i;
+    return -1;
+}
+xc_integer_t sing_mark(xc_string_t cls) {
+    xc_integer_t existing = sing_index(cls);
+    if (existing >= 0) return existing;
+    sing_name[sing_n] = cls; return (xc_integer_t)(sing_n++);
+}
 void ctype_add_field(xc_integer_t ti, xc_string_t fname, xc_integer_t fkind, xc_integer_t fwidth) {
     int t = (int)ti, f = ct_nf[t];
     ct_fname[t][f] = fname; ct_fkind[t][f] = (int)fkind; ct_foff[t][f] = ct_width[t];

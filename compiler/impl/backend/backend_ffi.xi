@@ -52,6 +52,9 @@ extern "C" {
     producer bind_reset()                                               // clear the interface->class binds
     producer bind_add(iface: String, cls: String)                       // record a bind
     mapper   bind_class(iface: String) -> String                        // the class bound to iface, or ""
+    producer sing_reset()                                               // clear the singleton registry
+    producer sing_mark(cls: String) -> Integer                          // mark a class singleton, return its index
+    mapper   sing_index(cls: String) -> Integer                         // singleton index, or -1
     producer xcb_write_exec(h: Integer, path: String) -> Integer        // write + chmod +x; 0 = ok
 }
 

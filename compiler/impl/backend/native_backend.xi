@@ -157,9 +157,9 @@ mapper bumpSlots(ps: PS, k: Integer) -> PS {
     return PS { toks: ps.toks, pos: ps.pos, insns: ps.insns, nextSlot: ps.nextSlot + k, resultTemp: ps.resultTemp, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultKind: ps.resultKind }
 }
 
-// Construct a class value: allocate its (zeroed) storage, then recursively
-// construct and store each dependency. Single bind, so this is fully static.
-mapper psEmitResolveClass(ps: PS, ci: Integer) -> PS {
+// Fresh construction: allocate zeroed storage, then recursively construct and
+// store each dependency.
+mapper emitConstruct(ps: PS, ci: Integer) -> PS {
     let bytes = ctype_width(ci) * 8
     if bytes == 0 { bytes = 8 }                        // at least one word for a stateless object
     let c1 = psEmitConst(ps, bytes)
@@ -179,6 +179,36 @@ mapper psEmitResolveClass(ps: PS, ci: Integer) -> PS {
         i = i + 1
     }
     return psKindResult(cur, ptrSlot, 3 + ci)
+}
+
+// Produce a class value. A singleton is built once and cached: load the cache,
+// and construct + store only on the first request.
+mapper psEmitResolveClass(ps: PS, ci: Integer) -> PS {
+    let si = sing_index(ctype_name(ci))
+    if si < 0 { return emitConstruct(ps, ci) }         // transient
+
+    let rslot = ps.nextSlot                            // holds the instance on both paths
+    let p0 = bumpSlots(ps, 1)
+    let g1 = psEmitConst(p0, si)
+    let gArgs: Integer[] = []
+    gArgs = appendInt(gArgs, g1.resultTemp)
+    let pg = psEmitCall(g1, "xstd_singleton_get", gArgs, g1.nextSlot, false)
+    let pc = psEmit(pg, xi_copy(rslot, pg.resultTemp))
+    let lc = pc.nextLabel
+    let le = pc.nextLabel + 1
+    let plab = withNextLabel(pc, pc.nextLabel + 2)
+    let pbrz = psEmit(plab, xi_brz(rslot, lc))         // cached == 0 -> construct
+    let pbr = psEmit(pbrz, xi_br(le))                  // else use the cache
+    let plc = psEmit(pbr, xi_label(lc))
+    let pcon = emitConstruct(plc, ci)
+    let pcp = psEmit(pcon, xi_copy(rslot, pcon.resultTemp))
+    let s1 = psEmitConst(pcp, si)
+    let sArgs: Integer[] = []
+    sArgs = appendInt(sArgs, s1.resultTemp)
+    sArgs = appendInt(sArgs, rslot)
+    let pset = psEmitCall(s1, "xstd_singleton_set", sArgs, s1.nextSlot, false)
+    let ple = psEmit(pset, xi_label(le))
+    return psKindResult(ple, rslot, 3 + ci)
 }
 mapper parseResolve(ps: PS) -> PS {
     let p1 = psAdvance(psAdvance(psAdvance(ps)))       // past IDENT, '.', 'resolve'
@@ -746,8 +776,14 @@ producer registerTypes(prog: Program) {
         if t.isCompound { addFields(ctype_add(t.name, 0), t.fields) }
     }
     for c in prog.classes { ctype_add(c.name, 1) }             // names first (so deps can resolve)
+    sing_reset()
     for m in prog.modules {
-        for b in m.bindings { bind_add(b.ifaceName, b.concreteName) }
+        for b in m.bindings {
+            bind_add(b.ifaceName, b.concreteName)
+            let scope = b.scopeKind
+            if string_len(scope) == 0 { scope = m.defaultScope }
+            if scope == "singleton" { sing_mark(b.concreteName) }   // shares one instance
+        }
     }
     for c in prog.classes {                                    // then fields: deps, then state
         let ci = ctype_index(c.name)
@@ -764,6 +800,8 @@ producer registerSigs(prog: Program) {
     fnsig_reset()
     fnsig_add("xstd_concat", 1)
     fnsig_add("xstd_alloc", 0)
+    fnsig_add("xstd_singleton_get", 0)
+    fnsig_add("xstd_singleton_set", 0)
     for f in prog.functions {
         let rs = 0
         if f.retCtype == "xc_string_t" { rs = 1 }
@@ -823,7 +861,9 @@ producer compileNative(diag: Diagnostics, host: Host, enc: InsnEncoder, obj: Obj
     for f in m.funcs { efs = appendEncodedFunc(efs, enc.encode(f)) }
     let externNames: String[] = []
     externNames = appendString(externNames, "xstd_concat")   // runtime string concat
-    externNames = appendString(externNames, "xstd_alloc")    // runtime array alloc
+    externNames = appendString(externNames, "xstd_alloc")    // runtime array/object alloc
+    externNames = appendString(externNames, "xstd_singleton_get")
+    externNames = appendString(externNames, "xstd_singleton_set")
     for x in prog.externs { externNames = appendString(externNames, x.name) }
     let lk = linkModule(EncodedModule { funcs: efs, entry: m.entry }, externNames)
     if not lk.ok {

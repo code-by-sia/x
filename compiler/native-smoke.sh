@@ -136,6 +136,12 @@ XC_OUT="$W" "$XC" --backend native "$W/di.xi" >/dev/null 2>&1
 diout=$("$W/di" 2>/dev/null)
 if [ "$diout" = "42" ]; then echo "  ✓ DI: injected adder -> 42"; else echo "  ✗ DI printed \"$diout\""; fail=1; fi
 
+# Singleton: two resolves share one instance (state accumulates).
+printf 'interface Counter { consumer inc()  projector get() -> Integer }\nclass Ctr implements Counter { deps {} state { n: Integer = 0 } consumer inc() { this.n = this.n + 1 }  projector get() -> Integer => this.n }\nextern "C" { producer xstd_put_int(n: Integer) }\nmodule M { bind Counter -> Ctr as singleton\n entry main(args: String[]) -> Integer { let a = M.resolve(Counter)  a.inc()  a.inc()  let b = M.resolve(Counter)  b.inc()  xstd_put_int(b.get())  return 0 } }\n' > "$W/sg.xi"
+XC_OUT="$W" "$XC" --backend native "$W/sg.xi" >/dev/null 2>&1
+sgout=$("$W/sg" 2>/dev/null)
+if [ "$sgout" = "3" ]; then echo "  ✓ singleton: shared instance -> 3"; else echo "  ✗ singleton printed \"$sgout\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1
