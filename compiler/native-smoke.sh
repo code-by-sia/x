@@ -130,6 +130,12 @@ XC_OUT="$W" "$XC" --backend native "$W/if.xi" >/dev/null 2>&1
 ifout=$("$W/if" 2>/dev/null)
 if [ "$ifout" = "3" ]; then echo "  ✓ interface: counter inc x3 -> 3"; else echo "  ✗ interface printed \"$ifout\""; fail=1; fi
 
+# Dependency injection: a class with an injected dependency.
+printf 'interface Adder { mapper add(a: Integer, b: Integer) -> Integer }\nclass RealAdder implements Adder { deps {} mapper add(a: Integer, b: Integer) -> Integer { return a + b } }\ninterface Calc { mapper compute() -> Integer }\nclass RealCalc implements Calc { deps { adder: Adder } mapper compute() -> Integer { return adder.add(19, 23) } }\nextern "C" { producer xstd_put_int(n: Integer) }\nmodule M { bind Adder -> RealAdder  bind Calc -> RealCalc\n entry main(args: String[]) -> Integer { let c = M.resolve(Calc)  xstd_put_int(c.compute())  return 0 } }\n' > "$W/di.xi"
+XC_OUT="$W" "$XC" --backend native "$W/di.xi" >/dev/null 2>&1
+diout=$("$W/di" 2>/dev/null)
+if [ "$diout" = "42" ]; then echo "  ✓ DI: injected adder -> 42"; else echo "  ✗ DI printed \"$diout\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1

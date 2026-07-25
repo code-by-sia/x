@@ -30,6 +30,7 @@ The native backend is being built in stages behind the flag, with the C backend 
 - `Integer[]` arrays: literals, `.len`, and `.data[i]` indexing (a fat pointer `{ data, len, cap }` in three slots; a literal allocates its backing store through the runtime);
 - compound types (`type T = { ... }`) with Integer, String, and array fields: construction `T { f: v, ... }` and field access `t.f` (laid out inline, one region per field);
 - interfaces and classes: `Module.resolve(I)` returns an instance of the bound class, method calls dispatch to it, and methods read and write `this.field` on the heap-allocated (zero-initialized) state;
+- dependency injection: a class's `deps { d: I }` are stored in its instance and constructed recursively on resolve; a method reaches a dependency by its bare name;
 - expressions over integer literals, parameters, locals, `+ - * / %`, comparisons (`== != < <= > >=`), and parentheses.
 
 Locals and parameters get dedicated stack slots (stable across loop iterations); expression temps get fresh slots; branches are resolved in a second pass, and calls follow the AArch64 convention (args in `x0`..`x7`, result in `x0`, `fp`/`lr` saved). The backend lays the functions out and patches every `BL` itself. Anything outside the subset (a string, a non-integer function, an unsupported operator) is reported and refused rather than mis-compiled:
@@ -79,7 +80,8 @@ Supporting a new arch_os is therefore additive: write an `InsnEncoder` for the i
 | Integer arrays: literals, `.len`, `.data[i]` | done |
 | Compound types: construction and field access | done |
 | Interfaces + classes: resolve, method dispatch, state (single bind, static) | done |
-| DI with deps/singletons, polymorphic dispatch, generics, sum types | next |
+| Dependency injection (`deps`, recursive construction) | done |
+| Singletons, polymorphic dispatch, generics, sum types | next |
 | Full language coverage, diffed against the C backend | planned |
 | Self-host: compile the compiler with the native backend | planned |
 | Second target (Linux ELF, x86-64) | planned |

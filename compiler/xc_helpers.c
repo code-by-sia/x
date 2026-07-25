@@ -558,6 +558,9 @@ xc_integer_t ctype_field_kind(xc_integer_t ti, xc_string_t fname) {
     for (int f = 0; f < ct_nf[t]; f++) if (ct_streq(ct_fname[t][f], fname)) return ct_fkind[t][f];
     return 0;
 }
+xc_integer_t ctype_nfields(xc_integer_t ti) { return ct_nf[(int)ti]; }
+xc_integer_t ctype_field_kind_at(xc_integer_t ti, xc_integer_t f) { return ct_fkind[(int)ti][(int)f]; }
+xc_integer_t ctype_field_off_at(xc_integer_t ti, xc_integer_t f) { return ct_foff[(int)ti][(int)f]; }
 
 /* Unescape a source string literal (\n \t \r \0 \\ \" ...) — length, and append. */
 xc_integer_t unescapedLen(xc_string_t s) {

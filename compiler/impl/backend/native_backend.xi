@@ -157,16 +157,28 @@ mapper bumpSlots(ps: PS, k: Integer) -> PS {
     return PS { toks: ps.toks, pos: ps.pos, insns: ps.insns, nextSlot: ps.nextSlot + k, resultTemp: ps.resultTemp, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultKind: ps.resultKind }
 }
 
-// Module.resolve(Iface): allocate the bound class's zeroed state and produce a
-// class value (the heap pointer). Single bind, so dispatch is static.
-mapper psEmitResolve(ps: PS, ci: Integer) -> PS {
+// Construct a class value: allocate its (zeroed) storage, then recursively
+// construct and store each dependency. Single bind, so this is fully static.
+mapper psEmitResolveClass(ps: PS, ci: Integer) -> PS {
     let bytes = ctype_width(ci) * 8
     if bytes == 0 { bytes = 8 }                        // at least one word for a stateless object
     let c1 = psEmitConst(ps, bytes)
     let args: Integer[] = []
     args = appendInt(args, c1.resultTemp)
     let c2 = psEmitCall(c1, "xstd_alloc", args, c1.nextSlot, false)
-    return psKindResult(c2, c2.resultTemp, 3 + ci)
+    let ptrSlot = c2.resultTemp
+    let cur = c2
+    let nf = ctype_nfields(ci)
+    let i = 0
+    while i < nf {
+        let fk = ctype_field_kind_at(ci, i)
+        if fk >= 3 and ctype_is_ref(fk - 3) == 1 {     // a dependency: construct and store it
+            let dc = psEmitResolveClass(cur, fk - 3)
+            cur = psEmit(dc, xi_astorec(ptrSlot, ctype_field_off_at(ci, i), dc.resultTemp))
+        }
+        i = i + 1
+    }
+    return psKindResult(cur, ptrSlot, 3 + ci)
 }
 mapper parseResolve(ps: PS) -> PS {
     let p1 = psAdvance(psAdvance(psAdvance(ps)))       // past IDENT, '.', 'resolve'
@@ -176,7 +188,7 @@ mapper parseResolve(ps: PS) -> PS {
     if psKind(p2) != 101 { return psFail(p2) }         // ')'
     let ci = ctype_index(bind_class(iface))
     if ci < 0 { return psFail(p2) }
-    return parsePostfix(psEmitResolve(psAdvance(p2), ci))
+    return parsePostfix(psEmitResolveClass(psAdvance(p2), ci))
 }
 
 // c.method(args): a static call to <Class>_<method> with the object as arg 0.
@@ -320,8 +332,15 @@ mapper parsePrimary(ps: PS) -> PS {
         }                                                     // else the { belongs to an enclosing form
         if psKind(p1) == 107 and psText(psAdvance(p1)) == "resolve" { return parseResolve(ps) }   // Module.resolve(I)
         let slot = lookupLocal(ps, name)
-        if slot < 0 { return psFail(ps) }
-        return parsePostfix(psKindResult(p1, slot, lookupKind(ps, name)))
+        if slot >= 0 { return parsePostfix(psKindResult(p1, slot, lookupKind(ps, name))) }
+        // not a local: a bare dep/field of `this` inside a method
+        let thisSlot = lookupLocal(ps, "this")
+        if thisSlot >= 0 {
+            let ti = lookupKind(ps, "this") - 3
+            let off = ctype_field_off(ti, name)
+            if off >= 0 { return parsePostfix(psEmitAloadc(p1, thisSlot, off, ctype_field_kind(ti, name))) }
+        }
+        return psFail(ps)
     }
     if k == 100 {
         let inner = parseExpr(psAdvance(ps))
@@ -726,9 +745,17 @@ producer registerTypes(prog: Program) {
     for t in prog.types {
         if t.isCompound { addFields(ctype_add(t.name, 0), t.fields) }
     }
-    for c in prog.classes { addFields(ctype_add(c.name, 1), c.stateFields) }
+    for c in prog.classes { ctype_add(c.name, 1) }             // names first (so deps can resolve)
     for m in prog.modules {
         for b in m.bindings { bind_add(b.ifaceName, b.concreteName) }
+    }
+    for c in prog.classes {                                    // then fields: deps, then state
+        let ci = ctype_index(c.name)
+        for dep in c.depList {                                 // a dep is a pointer to its bound class
+            let dci = ctype_index(bind_class(dep.ifaceName))
+            if dci >= 0 { ctype_add_field(ci, dep.name, 3 + dci, 1) }
+        }
+        addFields(ci, c.stateFields)
     }
 }
 

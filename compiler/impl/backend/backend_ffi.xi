@@ -46,6 +46,9 @@ extern "C" {
     mapper   ctype_width(ti: Integer) -> Integer                        // total slot width
     mapper   ctype_field_off(ti: Integer, fname: String) -> Integer     // field slot offset, or -1
     mapper   ctype_field_kind(ti: Integer, fname: String) -> Integer    // field kind (0/1/2)
+    mapper   ctype_nfields(ti: Integer) -> Integer                      // number of fields
+    mapper   ctype_field_kind_at(ti: Integer, f: Integer) -> Integer    // kind of field f
+    mapper   ctype_field_off_at(ti: Integer, f: Integer) -> Integer     // slot offset of field f
     producer bind_reset()                                               // clear the interface->class binds
     producer bind_add(iface: String, cls: String)                       // record a bind
     mapper   bind_class(iface: String) -> String                        // the class bound to iface, or ""
