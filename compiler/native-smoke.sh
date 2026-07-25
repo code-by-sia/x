@@ -153,6 +153,13 @@ poly() {  # $1 = bound class, $2 = expected
 poly Loud 7
 poly Quiet 3
 
+# List injection: an I[] dependency collects one of every implementor; the loop
+# dispatches .area() to each concrete type (9 + 12 = 21).
+printf 'interface Shape { projector area() -> Integer }\nclass Sq implements Shape { deps {} state {} projector area() -> Integer { return 9 } }\nclass Rc implements Shape { deps {} state {} projector area() -> Integer { return 12 } }\ninterface Report { projector total() -> Integer }\nclass Summer implements Report { deps { shapes: Shape[] } projector total() -> Integer { let s = 0  let i = 0  while i < shapes.len { s = s + shapes.data[i].area()  i = i + 1 }  return s } }\nextern "C" { producer xstd_put_int(n: Integer) }\nmodule M { bind Report -> Summer\n entry main(args: String[]) -> Integer { let r = M.resolve(Report)  xstd_put_int(r.total())  return 0 } }\n' > "$W/lst.xi"
+XC_OUT="$W" "$XC" --backend native "$W/lst.xi" >/dev/null 2>&1
+lstout=$("$W/lst" 2>/dev/null)
+if [ "$lstout" = "21" ]; then echo "  ✓ list injection: Shape[] areas 9+12 = 21"; else echo "  ✗ list injection printed \"$lstout\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1

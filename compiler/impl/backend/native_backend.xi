@@ -174,9 +174,17 @@ mapper emitConstruct(ps: PS, ci: Integer) -> PS {
     let i = 0
     while i < nf {
         let fk = ctype_field_kind_at(ci, i)
-        if fk >= 3 and ctype_is_ref(fk - 3) == 1 {     // a dependency: construct and store it
-            let dc = psEmitResolveClass(cur, fk - 3)
-            cur = psEmit(dc, xi_astorec(ptrSlot, ctype_field_off_at(ci, i), dc.resultTemp))
+        let off = ctype_field_off_at(ci, i)
+        if fk >= 1000 {                                // a list dep: construct one of each implementor
+            let lst = psEmitImplList(cur, fk - 1000)
+            cur = lst
+            let j = 0
+            while j < 3 { cur = psEmit(cur, xi_astorec(ptrSlot, off + j, lst.resultTemp + j))  j = j + 1 }
+        } else {
+            if fk >= 3 and ctype_is_ref(fk - 3) == 1 { // a single dep: construct and store it
+                let dc = psEmitResolveClass(cur, fk - 3)
+                cur = psEmit(dc, xi_astorec(ptrSlot, off, dc.resultTemp))
+            }
         }
         i = i + 1
     }
@@ -299,10 +307,42 @@ mapper psEmitAloadc(ps: PS, ptrSlot: Integer, off: Integer, fkind: Integer) -> P
     return psKindResult(p, t, fkind)
 }
 
-// Load one element: dst = ((Integer*)ptr)[idx]. Result is an Integer.
-mapper psEmitAload(ps: PS, ptrSlot: Integer, idxSlot: Integer) -> PS {
+// Load one element: dst = ((i64*)ptr)[idx], one slot, tagged with `kind`. An
+// Integer[] element is an Integer (kind 0); a ref array's element is a class or
+// interface pointer (kind 3+ti).
+mapper psEmitAloadK(ps: PS, ptrSlot: Integer, idxSlot: Integer, kind: Integer) -> PS {
     let t = ps.nextSlot
-    return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_aload(t, ptrSlot, idxSlot)), nextSlot: t + 1, resultTemp: t, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultKind: 0 }
+    return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_aload(t, ptrSlot, idxSlot)), nextSlot: t + 1, resultTemp: t, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultKind: kind }
+}
+mapper psEmitAload(ps: PS, ptrSlot: Integer, idxSlot: Integer) -> PS {
+    return psEmitAloadK(ps, ptrSlot, idxSlot, 0)
+}
+
+// Build { data, len, cap } holding one freshly-constructed instance of every
+// class implementing interface `ii` (a list-injected `I[]` dependency).
+mapper psEmitImplList(ps: PS, ii: Integer) -> PS {
+    let n = iface_nimpls(ii)
+    let cur = ps
+    let ptrSlots: Integer[] = []
+    let k = 0
+    while k < n {
+        cur = psEmitResolveClass(cur, iface_impl_at(ii, k))
+        ptrSlots = appendInt(ptrSlots, cur.resultTemp)
+        k = k + 1
+    }
+    let ca = psEmitConst(cur, n * 8)
+    let aArgs: Integer[] = []
+    aArgs = appendInt(aArgs, ca.resultTemp)
+    let cA = psEmitCall(ca, "xstd_alloc", aArgs, ca.nextSlot, false)
+    let dataPtr = cA.resultTemp
+    let base = cA.nextSlot                              // data / len / cap
+    let p = bumpSlots(cA, 3)
+    p = psEmit(p, xi_copy(base, dataPtr))
+    p = psEmit(p, xi_const(base + 1, n))
+    p = psEmit(p, xi_const(base + 2, n))
+    let j = 0
+    while j < n { p = psEmit(p, xi_astorec(base, j, intArrGet(ptrSlots, j)))  j = j + 1 }
+    return psKindResult(p, base, 1000 + ii)
 }
 
 // An Integer[] literal: allocate n*8 bytes, store each element, and produce the
@@ -454,7 +494,7 @@ mapper parsePostfix(ps: PS) -> PS {
     while psKind(cur) == 107 {                     // '.'
         let field = psText(psAdvance(cur))
         let after = psAdvance(psAdvance(cur))       // past '.' and the field name
-        if cur.resultKind >= 3 {                    // compound field, class field, or method
+        if cur.resultKind >= 3 and cur.resultKind < 1000 {   // compound field, class field, or method
             let ti = cur.resultKind - 3
             if ctype_is_ref(ti) == 2 and psKind(after) == 100 {          // interface: dynamic dispatch
                 cur = parseDynMethodCall(after, ti, field, cur.resultTemp)
@@ -471,7 +511,9 @@ mapper parsePostfix(ps: PS) -> PS {
             }
             }
         }
-        else {
+        else {                                      // Integer[] (kind 2) or a ref array (>= 1000)
+        let elemKind = 0
+        if cur.resultKind >= 1000 { elemKind = 3 + (cur.resultKind - 1000) }   // element is a class/interface ref
         if field == "len" { cur = psKindResult(after, cur.resultTemp + 1, 0) }
         else {
             if field == "cap" { cur = psKindResult(after, cur.resultTemp + 2, 0) }
@@ -482,7 +524,7 @@ mapper parsePostfix(ps: PS) -> PS {
                     let idx = parseExpr(psAdvance(after))
                     if not idx.ok { return idx }
                     if psKind(idx) != 105 { return psFail(idx) }       // ']'
-                    cur = psEmitAload(psAdvance(idx), ptrSlot, idx.resultTemp)
+                    cur = psEmitAloadK(psAdvance(idx), ptrSlot, idx.resultTemp, elemKind)
                 } else { return psFail(cur) }
             }
         }
@@ -848,16 +890,21 @@ producer registerTypes(prog: Program) {
     for m in prog.modules {
         for b in m.bindings {
             bind_add(b.ifaceName, b.concreteName)
-            let scope = b.scopeKind
-            if string_len(scope) == 0 { scope = m.defaultScope }
-            if scope == "singleton" { sing_mark(b.concreteName) }   // shares one instance
+            let sk = b.scopeKind
+            if string_len(sk) == 0 { sk = m.defaultScope }
+            if sk == "singleton" { sing_mark(b.concreteName) }      // shares one instance
         }
     }
     for c in prog.classes {                                    // then fields: deps, then state
         let ci = ctype_index(c.name)
-        for dep in c.depList {                                 // a dep is a pointer to its bound class
-            let dci = ctype_index(bind_class(dep.ifaceName))
-            if dci >= 0 { ctype_add_field(ci, dep.name, 3 + dci, 1) }
+        for dep in c.depList {
+            if dep.form == "list" {                            // I[]: an array of all implementors
+                let ii = ctype_index(dep.ifaceName)
+                if ii >= 0 { ctype_add_field(ci, dep.name, 1000 + ii, 3) }
+            } else {                                           // a single dep: a pointer to its bound class
+                let dci = ctype_index(bind_class(dep.ifaceName))
+                if dci >= 0 { ctype_add_field(ci, dep.name, 3 + dci, 1) }
+            }
         }
         addFields(ci, c.stateFields)
     }
