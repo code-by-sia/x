@@ -38,8 +38,8 @@ extern "C" {
     producer fnsig_add(name: String, retStr: Integer)                   // record a callee's return kind
     mapper   fnsig_ret_str(name: String) -> Integer                     // 1 if the callee returns a String
     producer ctype_reset()                                              // clear the compound-type registry
-    producer ctype_add(name: String, isRef: Integer) -> Integer         // register a type (isRef=class), return index
-    mapper   ctype_is_ref(ti: Integer) -> Integer                       // 1 if a class (heap pointer)
+    producer ctype_add(name: String, isRef: Integer) -> Integer         // register a type (1=class, 2=interface), return index
+    mapper   ctype_is_ref(ti: Integer) -> Integer                       // 1 = class (heap pointer), 2 = interface
     mapper   ctype_name(ti: Integer) -> String                          // the type's name
     producer ctype_add_field(ti: Integer, fname: String, fkind: Integer, fwidth: Integer)
     mapper   ctype_index(name: String) -> Integer                       // type index, or -1
@@ -55,6 +55,10 @@ extern "C" {
     producer sing_reset()                                               // clear the singleton registry
     producer sing_mark(cls: String) -> Integer                          // mark a class singleton, return its index
     mapper   sing_index(cls: String) -> Integer                         // singleton index, or -1
+    producer iface_impl_reset()                                         // clear the interface->implementors registry
+    producer iface_impl_add(ii: Integer, ci: Integer)                   // record: class ci implements interface ii
+    mapper   iface_nimpls(ii: Integer) -> Integer                       // how many classes implement interface ii
+    mapper   iface_impl_at(ii: Integer, k: Integer) -> Integer          // class index of the k-th implementor, or -1
     producer xcb_write_exec(h: Integer, path: String) -> Integer        // write + chmod +x; 0 = ok
 }
 

@@ -142,6 +142,17 @@ XC_OUT="$W" "$XC" --backend native "$W/sg.xi" >/dev/null 2>&1
 sgout=$("$W/sg" 2>/dev/null)
 if [ "$sgout" = "3" ]; then echo "  ✓ singleton: shared instance -> 3"; else echo "  ✗ singleton printed \"$sgout\""; fail=1; fi
 
+# Polymorphic dispatch: an interface value dispatches to the bound implementor at
+# runtime. Flipping the bind must flip the result with no change to the caller.
+poly() {  # $1 = bound class, $2 = expected
+    printf 'interface Speaker { projector level() -> Integer }\nclass Loud implements Speaker { deps {} state {} projector level() -> Integer { return 7 } }\nclass Quiet implements Speaker { deps {} state {} projector level() -> Integer { return 3 } }\nmapper speak(s: Speaker) -> Integer { return s.level() }\nextern "C" { producer xstd_put_int(n: Integer) }\nmodule M { bind Speaker -> %s\n entry main(args: String[]) -> Integer { let s = M.resolve(Speaker)  xstd_put_int(speak(s))  return 0 } }\n' "$1" > "$W/poly.xi"
+    XC_OUT="$W" "$XC" --backend native "$W/poly.xi" >/dev/null 2>&1
+    out=$("$W/poly" 2>/dev/null)
+    if [ "$out" = "$2" ]; then echo "  ✓ dispatch: bind Speaker->$1 -> $out"; else echo "  ✗ dispatch: bind Speaker->$1 printed \"$out\" (want $2)"; fail=1; fi
+}
+poly Loud 7
+poly Quiet 3
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1

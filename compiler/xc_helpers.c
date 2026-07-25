@@ -520,11 +520,14 @@ static int ct_width[CT_MAX];
 static xc_string_t ct_fname[CT_MAX][CT_FMAX];
 static int ct_fkind[CT_MAX][CT_FMAX];
 static int ct_foff[CT_MAX][CT_FMAX];
-static int ct_ref[CT_MAX];   /* 1 = class (heap pointer, one slot), 0 = inline compound */
+static int ct_ref[CT_MAX];   /* 1 = class (heap pointer), 2 = interface, 0 = inline compound */
 static int ct_n = 0;
 static int ct_streq(xc_string_t a, xc_string_t b) { return a.len == b.len && memcmp(a.data, b.data, a.len) == 0; }
 void ctype_reset(void) { ct_n = 0; }
-xc_integer_t ctype_add(xc_string_t name, xc_integer_t isRef) { ct_name[ct_n] = name; ct_nf[ct_n] = 0; ct_width[ct_n] = 0; ct_ref[ct_n] = (int)isRef; return (xc_integer_t)(ct_n++); }
+/* A class instance reserves slot 0 for a class-index header (used by dynamic
+ * dispatch); its fields therefore start at offset 1. Compounds and interfaces
+ * carry no header. */
+xc_integer_t ctype_add(xc_string_t name, xc_integer_t isRef) { ct_name[ct_n] = name; ct_nf[ct_n] = 0; ct_width[ct_n] = ((int)isRef == 1) ? 1 : 0; ct_ref[ct_n] = (int)isRef; return (xc_integer_t)(ct_n++); }
 xc_integer_t ctype_is_ref(xc_integer_t ti) { return ct_ref[(int)ti]; }
 xc_string_t  ctype_name(xc_integer_t ti) { return ct_name[(int)ti]; }
 
@@ -553,6 +556,24 @@ xc_integer_t sing_mark(xc_string_t cls) {
     xc_integer_t existing = sing_index(cls);
     if (existing >= 0) return existing;
     sing_name[sing_n] = cls; return (xc_integer_t)(sing_n++);
+}
+
+/* Interface -> implementing classes (every class that `implements` it). Dynamic
+ * dispatch switches over these; list injection constructs one of each. */
+#define IMPL_MAX 8192
+static int impl_iface[IMPL_MAX], impl_cls[IMPL_MAX];
+static int impl_n = 0;
+void iface_impl_reset(void) { impl_n = 0; }
+void iface_impl_add(xc_integer_t ii, xc_integer_t ci) { impl_iface[impl_n] = (int)ii; impl_cls[impl_n] = (int)ci; impl_n++; }
+xc_integer_t iface_nimpls(xc_integer_t ii) {
+    int c = 0;
+    for (int i = 0; i < impl_n; i++) if (impl_iface[i] == (int)ii) c++;
+    return c;
+}
+xc_integer_t iface_impl_at(xc_integer_t ii, xc_integer_t k) {
+    int c = 0;
+    for (int i = 0; i < impl_n; i++) if (impl_iface[i] == (int)ii) { if (c == (int)k) return impl_cls[i]; c++; }
+    return -1;
 }
 void ctype_add_field(xc_integer_t ti, xc_string_t fname, xc_integer_t fkind, xc_integer_t fwidth) {
     int t = (int)ti, f = ct_nf[t];

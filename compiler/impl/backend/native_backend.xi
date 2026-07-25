@@ -38,8 +38,9 @@ type PS = {
 mapper slotWidth(kind: Integer) -> Integer {
     if kind == 1 { return 2 }
     if kind == 2 { return 3 }
+    if kind >= 1000 { return 3 }                       // an array of refs: { data, len, cap }
     if kind >= 3 {
-        if ctype_is_ref(kind - 3) == 1 { return 1 }   // a class value is one pointer slot
+        if ctype_is_ref(kind - 3) >= 1 { return 1 }    // a class or interface value is one pointer slot
         return ctype_width(kind - 3)
     }
     return 1
@@ -167,7 +168,8 @@ mapper emitConstruct(ps: PS, ci: Integer) -> PS {
     args = appendInt(args, c1.resultTemp)
     let c2 = psEmitCall(c1, "xstd_alloc", args, c1.nextSlot, false)
     let ptrSlot = c2.resultTemp
-    let cur = c2
+    let hc = psEmitConst(c2, ci)                       // class-index header at slot 0 (for dynamic dispatch)
+    let cur = psEmit(hc, xi_astorec(ptrSlot, 0, hc.resultTemp))
     let nf = ctype_nfields(ci)
     let i = 0
     while i < nf {
@@ -221,28 +223,71 @@ mapper parseResolve(ps: PS) -> PS {
     return parsePostfix(psEmitResolveClass(psAdvance(p2), ci))
 }
 
-// c.method(args): a static call to <Class>_<method> with the object as arg 0.
-mapper parseMethodCall(ps: PS, className: String, method: String, selfSlot: Integer) -> PS {
+// Parse a method call's argument list — ps at '(' — returning the state
+// positioned after ')' and the arg slots (self first, then each argument).
+mapper parseMethodArgs(ps: PS, selfSlot: Integer) -> ArgResult {
     let cur = psAdvance(ps)                            // consume '('
     let argSlots: Integer[] = []
     argSlots = appendInt(argSlots, selfSlot)          // `this`
     if psKind(cur) != 101 {
         let r = parseOneArg(cur)
-        if not r.ps.ok { return r.ps }
+        if not r.ps.ok { return ArgResult { ps: r.ps, slots: argSlots } }
         cur = r.ps
         argSlots = concatInts(argSlots, r.slots)
         while psKind(cur) == 106 {
             let r2 = parseOneArg(psAdvance(cur))
-            if not r2.ps.ok { return r2.ps }
+            if not r2.ps.ok { return ArgResult { ps: r2.ps, slots: argSlots } }
             cur = r2.ps
             argSlots = concatInts(argSlots, r2.slots)
         }
     }
-    if psKind(cur) != 101 { return psFail(cur) }       // ')'
-    if intArrLen(argSlots) > 8 { return psFail(cur) }
+    if psKind(cur) != 101 { return ArgResult { ps: psFail(cur), slots: argSlots } }   // ')'
+    return ArgResult { ps: psAdvance(cur), slots: argSlots }
+}
+
+// c.method(args): a static call to <Class>_<method> with the object as arg 0.
+mapper parseMethodCall(ps: PS, className: String, method: String, selfSlot: Integer) -> PS {
+    let a = parseMethodArgs(ps, selfSlot)
+    if not a.ps.ok { return a.ps }
+    if intArrLen(a.slots) > 8 { return psFail(a.ps) }
     let callee = className + "_" + method
-    let p2 = psAdvance(cur)
-    return psEmitCall(p2, callee, argSlots, p2.nextSlot, fnsig_ret_str(callee) == 1)
+    return psEmitCall(a.ps, callee, a.slots, a.ps.nextSlot, fnsig_ret_str(callee) == 1)
+}
+
+// x.method(args) where x is an interface value: dispatch on the object's
+// class-index header to the matching implementor. No vtable, no function
+// pointers — a compare-and-branch chain over the interface's implementors,
+// each an ordinary static call, all writing their result to one slot.
+mapper parseDynMethodCall(ps: PS, ii: Integer, method: String, selfSlot: Integer) -> PS {
+    let a = parseMethodArgs(ps, selfSlot)
+    if not a.ps.ok { return a.ps }
+    if intArrLen(a.slots) > 8 { return psFail(a.ps) }
+    let n = iface_nimpls(ii)
+    if n == 0 { return psFail(a.ps) }
+    let retStr = fnsig_ret_str(ctype_name(iface_impl_at(ii, 0)) + "_" + method) == 1
+    let rk = 0
+    if retStr { rk = 1 }
+    let rw = slotWidth(rk)
+    let rslot = a.ps.nextSlot                          // every arm writes its result here
+    let ph = psEmitAloadc(bumpSlots(a.ps, rw), selfSlot, 0, 0)   // load the class-index header
+    let hdr = ph.resultTemp
+    let lend = ph.nextLabel
+    let cur = withNextLabel(ph, ph.nextLabel + 1)
+    let k = 0
+    while k < n {
+        let cci = iface_impl_at(ii, k)
+        let lnext = cur.nextLabel
+        let pc = psEmitConst(withNextLabel(cur, cur.nextLabel + 1), cci)
+        let pe = psEmitCmp(pc, "eq", hdr, pc.resultTemp)
+        let pb = psEmit(pe, xi_brz(pe.resultTemp, lnext))        // not this class -> next arm
+        let pcall = psEmitCall(pb, ctype_name(cci) + "_" + method, a.slots, pb.nextSlot, retStr)
+        let pcp = pcall
+        let j = 0
+        while j < rw { pcp = psEmit(pcp, xi_copy(rslot + j, pcall.resultTemp + j))  j = j + 1 }
+        cur = psEmit(psEmit(pcp, xi_br(lend)), xi_label(lnext))
+        k = k + 1
+    }
+    return psKindResult(psEmit(cur, xi_label(lend)), rslot, rk)
 }
 
 // Load a heap field of a class value at a constant slot offset (this.field).
@@ -411,7 +456,11 @@ mapper parsePostfix(ps: PS) -> PS {
         let after = psAdvance(psAdvance(cur))       // past '.' and the field name
         if cur.resultKind >= 3 {                    // compound field, class field, or method
             let ti = cur.resultKind - 3
-            if ctype_is_ref(ti) == 1 and psKind(after) == 100 {          // c.method(args)
+            if ctype_is_ref(ti) == 2 and psKind(after) == 100 {          // interface: dynamic dispatch
+                cur = parseDynMethodCall(after, ti, field, cur.resultTemp)
+                if not cur.ok { return cur }
+            } else {
+            if ctype_is_ref(ti) == 1 and psKind(after) == 100 {          // c.method(args): static
                 cur = parseMethodCall(after, ctype_name(ti), field, cur.resultTemp)
                 if not cur.ok { return cur }
             } else {
@@ -419,6 +468,7 @@ mapper parsePostfix(ps: PS) -> PS {
                 if off < 0 { return psFail(cur) }
                 if ctype_is_ref(ti) == 1 { cur = psEmitAloadc(after, cur.resultTemp, off, ctype_field_kind(ti, field)) }   // heap field
                 else { cur = psKindResult(after, cur.resultTemp + off, ctype_field_kind(ti, field)) }                       // inline field
+            }
             }
         }
         else {
@@ -604,7 +654,10 @@ mapper parseDotStmt(ps: PS) -> PS {
     let pField = psAdvance(psAdvance(ps))              // past IDENT and '.'
     let field = psText(pField)
     let pAfter = psAdvance(pField)
-    if psKind(pAfter) == 100 { return parseMethodCall(pAfter, ctype_name(ti), field, slot) }   // c.method()
+    if psKind(pAfter) == 100 {                         // c.method() / s.method() as a statement
+        if ctype_is_ref(ti) == 2 { return parseDynMethodCall(pAfter, ti, field, slot) }
+        return parseMethodCall(pAfter, ctype_name(ti), field, slot)
+    }
     if psKind(pAfter) != 111 { return psFail(pAfter) } // '='
     let off = ctype_field_off(ti, field)
     if off < 0 { return psFail(pField) }
@@ -653,12 +706,18 @@ mapper parseNativeParams(pstr: String) -> ParamParse {
     while i <= n {
         if i == n or string_char_at(pstr, i) == 44 {          // ',' or end
             let piece = trimStr(string_slice(pstr, start, i))
+            let sp = findChar(piece, 32)                       // "<ctype> <name>"
+            if sp < 0 { return ParamParse { ok: false, names: names, kinds: kinds } }
+            let pct = string_slice(piece, 0, sp)
+            let name = trimStr(string_slice(piece, sp + 1, string_len(piece)))
             let kind = 0 - 1
-            let off = 0
-            if piece.startsWith2("xc_integer_t ") { kind = 0  off = 13 }
-            if piece.startsWith2("xc_string_t ")  { kind = 1  off = 12 }
+            if pct == "xc_integer_t" { kind = 0 }
+            if pct == "xc_string_t"  { kind = 1 }
+            if kind < 0 and pct.startsWith2("xc_") and string_len(pct) > 5 {   // a class or interface value
+                let ti = ctype_index(string_slice(pct, 3, string_len(pct) - 2))
+                if ti >= 0 { kind = 3 + ti }
+            }
             if kind < 0 { return ParamParse { ok: false, names: names, kinds: kinds } }
-            let name = trimStr(string_slice(piece, off, string_len(piece)))
             if string_len(name) == 0 { return ParamParse { ok: false, names: names, kinds: kinds } }
             names = appendString(names, name)
             kinds = appendInt(kinds, kind)
@@ -775,7 +834,16 @@ producer registerTypes(prog: Program) {
     for t in prog.types {
         if t.isCompound { addFields(ctype_add(t.name, 0), t.fields) }
     }
+    for ifc in prog.ifaces { ctype_add(ifc.name, 2) }          // interfaces (dispatch targets)
     for c in prog.classes { ctype_add(c.name, 1) }             // names first (so deps can resolve)
+    iface_impl_reset()                                         // which classes implement each interface
+    for c in prog.classes {
+        let ci = ctype_index(c.name)
+        for impl in c.implNames {
+            let ii = ctype_index(impl)
+            if ii >= 0 { iface_impl_add(ii, ci) }
+        }
+    }
     sing_reset()
     for m in prog.modules {
         for b in m.bindings {
