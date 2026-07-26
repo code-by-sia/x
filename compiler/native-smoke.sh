@@ -160,6 +160,13 @@ XC_OUT="$W" "$XC" --backend native "$W/lst.xi" >/dev/null 2>&1
 lstout=$("$W/lst" 2>/dev/null)
 if [ "$lstout" = "21" ]; then echo "  ✓ list injection: Shape[] areas 9+12 = 21"; else echo "  ✗ list injection printed \"$lstout\""; fail=1; fi
 
+# Generic interface: Box<Integer> and Box<String> monomorphize to distinct
+# concrete interfaces, each auto-wired to its sole implementor and dispatched.
+printf 'interface Box<T> { mapper get() -> T }\nclass IntBox implements Box<Integer> { deps {} mapper get() -> Integer => 42 }\nclass StrBox implements Box<String> { deps {} mapper get() -> String => "ok" }\ninterface Runner { mapper run() -> Integer }\nclass IntRunner implements Runner { deps { b: Box<Integer> } mapper run() -> Integer => b.get() }\ninterface Teller { mapper tell() -> String }\nclass StrTeller implements Teller { deps { b: Box<String> } mapper tell() -> String => b.get() }\nextern "C" { producer xstd_put_int(n: Integer)  producer xstd_put_str(s: String) }\nmodule M { bind Runner -> IntRunner  bind Teller -> StrTeller\n entry main(args: String[]) -> Integer { let r = M.resolve(Runner)  let t = M.resolve(Teller)  xstd_put_int(r.run())  xstd_put_str(t.tell())  return 0 } }\n' > "$W/gen.xi"
+XC_OUT="$W" "$XC" --backend native "$W/gen.xi" >/dev/null 2>&1
+genout=$("$W/gen" 2>/dev/null | tr '\n' ' ')
+if [ "$genout" = "42 ok" ]; then echo "  ✓ generics: Box<Integer>->42, Box<String>->ok"; else echo "  ✗ generics printed \"$genout\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1

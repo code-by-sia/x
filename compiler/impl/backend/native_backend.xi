@@ -191,6 +191,19 @@ mapper emitConstruct(ps: PS, ci: Integer) -> PS {
     return psKindResult(cur, ptrSlot, 3 + ci)
 }
 
+// The concrete class to build for an interface or class name: an explicit bind
+// wins; a concrete class is itself; otherwise an interface with exactly one
+// implementor is auto-wired to it. -1 when unresolvable (unbound and ambiguous).
+mapper concreteClassOf(name: String) -> Integer {
+    let bc = bind_class(name)
+    if string_len(bc) > 0 { return ctype_index(bc) }
+    let ti = ctype_index(name)
+    if ti < 0 { return 0 - 1 }
+    if ctype_is_ref(ti) == 1 { return ti }             // already a concrete class
+    if iface_nimpls(ti) == 1 { return iface_impl_at(ti, 0) }   // sole implementor
+    return 0 - 1
+}
+
 // Produce a class value. A singleton is built once and cached: load the cache,
 // and construct + store only on the first request.
 mapper psEmitResolveClass(ps: PS, ci: Integer) -> PS {
@@ -226,7 +239,7 @@ mapper parseResolve(ps: PS) -> PS {
     let iface = psText(psAdvance(p1))
     let p2 = psAdvance(psAdvance(p1))                  // past '(' and interface name
     if psKind(p2) != 101 { return psFail(p2) }         // ')'
-    let ci = ctype_index(bind_class(iface))
+    let ci = concreteClassOf(iface)
     if ci < 0 { return psFail(p2) }
     return parsePostfix(psEmitResolveClass(psAdvance(p2), ci))
 }
@@ -901,8 +914,8 @@ producer registerTypes(prog: Program) {
             if dep.form == "list" {                            // I[]: an array of all implementors
                 let ii = ctype_index(dep.ifaceName)
                 if ii >= 0 { ctype_add_field(ci, dep.name, 1000 + ii, 3) }
-            } else {                                           // a single dep: a pointer to its bound class
-                let dci = ctype_index(bind_class(dep.ifaceName))
+            } else {                                           // a single dep: a pointer to its concrete class
+                let dci = concreteClassOf(dep.ifaceName)
                 if dci >= 0 { ctype_add_field(ci, dep.name, 3 + dci, 1) }
             }
         }
