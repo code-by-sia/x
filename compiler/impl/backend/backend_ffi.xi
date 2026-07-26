@@ -44,6 +44,12 @@ extern "C" {
     producer ctype_add_field(ti: Integer, fname: String, fkind: Integer, fwidth: Integer)
     mapper   ctype_index(name: String) -> Integer                       // type index, or -1
     mapper   ctype_width(ti: Integer) -> Integer                        // total slot width
+    producer ctype_set_width(ti: Integer, w: Integer)                   // override a type's slot width (sum: 1 tag + payload)
+    producer var_reset()                                                // clear the sum-variant registry
+    producer var_add(name: String, sumTi: Integer, tag: Integer, payTi: Integer)   // register a variant
+    mapper   var_sum_of(name: String) -> Integer                        // the sum type index for a variant name, or -1
+    mapper   var_tag_of(name: String) -> Integer                        // the variant's tag, or -1
+    mapper   var_pay_of(name: String) -> Integer                        // the variant's payload compound index, or -1
     mapper   ctype_field_off(ti: Integer, fname: String) -> Integer     // field slot offset, or -1
     mapper   ctype_field_kind(ti: Integer, fname: String) -> Integer    // field kind (0/1/2)
     mapper   ctype_nfields(ti: Integer) -> Integer                      // number of fields

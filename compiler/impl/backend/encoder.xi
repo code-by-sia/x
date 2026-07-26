@@ -167,13 +167,10 @@ mapper encodeArm64(f: XFunc) -> EncResult {
     let pslot = 0
     let pi = 0
     while pi < np {
-        ws = appendInt(ws, aStrSp(preg, pslot * 8))
-        if intArrGet(f.paramKinds, pi) == 1 {                              // String: two registers
-            ws = appendInt(ws, aStrSp(preg + 1, (pslot + 1) * 8))
-            preg = preg + 2  pslot = pslot + 2
-        } else {
-            preg = preg + 1  pslot = pslot + 1
-        }
+        let pw = intArrGet(f.paramKinds, pi)                               // slot width (registers to spill)
+        let pj = 0
+        while pj < pw { ws = appendInt(ws, aStrSp(preg + pj, (pslot + pj) * 8))  pj = pj + 1 }
+        preg = preg + pw  pslot = pslot + pw
         pi = pi + 1
     }
 

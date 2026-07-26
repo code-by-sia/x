@@ -40,8 +40,9 @@ mapper slotWidth(kind: Integer) -> Integer {
     if kind == 2 { return 3 }
     if kind >= 1000 { return 3 }                       // an array of refs: { data, len, cap }
     if kind >= 3 {
-        if ctype_is_ref(kind - 3) >= 1 { return 1 }    // a class or interface value is one pointer slot
-        return ctype_width(kind - 3)
+        let r = ctype_is_ref(kind - 3)
+        if r == 1 or r == 2 { return 1 }               // a class or interface value is one pointer slot
+        return ctype_width(kind - 3)                   // a compound (0) or sum (3): inline value
     }
     return 1
 }
@@ -83,6 +84,20 @@ mapper declareLocal(ps: PS, name: String, kind: Integer) -> PS {
     let slot = ps.nextSlot
     let ns = slot + slotWidth(kind)
     return PS { toks: ps.toks, pos: ps.pos, insns: ps.insns, nextSlot: ns, resultTemp: ps.resultTemp, ok: ps.ok, names: appendString(ps.names, name), slots: appendInt(ps.slots, slot), nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: appendInt(ps.kinds, kind), resultKind: ps.resultKind }
+}
+// Bind a name to an already-occupied slot (a match payload aliases the subject's
+// slots, no copy). Overwrites an existing binding of the same name so each match
+// arm rebinds cleanly.
+mapper bindLocal(ps: PS, name: String, slot: Integer, kind: Integer) -> PS {
+    let i = 0
+    let n = stringArrLen(ps.names)
+    while i < n {
+        if stringArrGet(ps.names, i) == name {
+            return PS { toks: ps.toks, pos: ps.pos, insns: ps.insns, nextSlot: ps.nextSlot, resultTemp: ps.resultTemp, ok: ps.ok, names: ps.names, slots: setInt(ps.slots, i, slot), nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: setInt(ps.kinds, i, kind), resultKind: ps.resultKind }
+        }
+        i = i + 1
+    }
+    return PS { toks: ps.toks, pos: ps.pos, insns: ps.insns, nextSlot: ps.nextSlot, resultTemp: ps.resultTemp, ok: ps.ok, names: appendString(ps.names, name), slots: appendInt(ps.slots, slot), nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: appendInt(ps.kinds, kind), resultKind: ps.resultKind }
 }
 mapper lookupLocal(ps: PS, name: String) -> Integer {
     let i = 0
@@ -455,6 +470,7 @@ mapper parsePrimary(ps: PS) -> PS {
         let name = psText(ps)
         let p1 = psAdvance(ps)
         if psKind(p1) == 100 { return parseCall(p1, name) }   // '(' -> call
+        if var_sum_of(name) >= 0 { return parsePostfix(parseVariantLit(ps, name)) }   // sum-type variant
         if psKind(p1) == 102 and ctype_index(name) >= 0 {     // 'T {' -> compound construction
             return parsePostfix(parseCompoundLit(ps, ctype_index(name)))
         }                                                     // else the { belongs to an enclosing form
@@ -499,6 +515,38 @@ mapper parseCompoundLit(ps: PS, ti: Integer) -> PS {
     }
     if psKind(cur) != 103 { return psFail(cur) }                     // '}'
     return psKindResult(psAdvance(cur), base, 3 + ti)
+}
+
+// A sum-type variant literal: `Variant { field: v, ... }` or a nullary `Variant`.
+// The value is laid out inline as [tag, payload...]; the payload fields live in
+// the variant's payload compound, stored at slot 1 upward.
+mapper parseVariantLit(ps: PS, vname: String) -> PS {
+    let sumTi = var_sum_of(vname)
+    let tag = var_tag_of(vname)
+    let payTi = var_pay_of(vname)
+    let base = ps.nextSlot
+    let sw = ctype_width(sumTi)
+    let cur = psEmit(bumpSlots(psAdvance(ps), sw), xi_const(base, tag))   // reserve slots; slot 0 = tag
+    if psKind(cur) == 102 and payTi >= 0 {                               // '{ fields }'
+        cur = psAdvance(cur)
+        while psKind(cur) != 103 and psKind(cur) != 0 {
+            let fname = psText(cur)
+            let afterName = psAdvance(cur)
+            if psKind(afterName) != 108 { return psFail(afterName) }     // ':'
+            let off = ctype_field_off(payTi, fname)
+            if off < 0 { return psFail(cur) }
+            let v = parseExpr(psAdvance(afterName))
+            if not v.ok { return v }
+            let cc = v
+            let j = 0
+            while j < slotWidth(v.resultKind) { cc = psEmit(cc, xi_copy(base + 1 + off + j, v.resultTemp + j))  j = j + 1 }
+            cur = cc
+            if psKind(cur) == 106 { cur = psAdvance(cur) }               // ','
+        }
+        if psKind(cur) != 103 { return psFail(cur) }                     // '}'
+        cur = psAdvance(cur)
+    }
+    return psKindResult(cur, base, 3 + sumTi)
 }
 
 // Postfix: array `.len`/`.cap`/`.data[i]`, or a compound field `.name`.
@@ -682,12 +730,53 @@ mapper parseWhile(ps: PS) -> PS {
     return psEmit(p5, xi_label(lEnd))
 }
 
+// match <sum-expr> { Variant [binding] -> { body } ... } — a tag test per arm,
+// binding the payload before running the arm, lowered to a compare/branch chain.
+mapper parseMatch(ps: PS) -> PS {
+    let subj = parseExpr(psAdvance(ps))                // consume 'match', parse the subject
+    if not subj.ok { return subj }
+    if subj.resultKind < 3 { return psFail(subj) }
+    let sumTi = subj.resultKind - 3
+    if ctype_is_ref(sumTi) != 3 { return psFail(subj) }   // subject must be a sum value
+    let tagSlot = subj.resultTemp                      // slot 0 of the value holds the tag
+    if psKind(subj) != 102 { return psFail(subj) }     // '{'
+    let lend = subj.nextLabel
+    let cur = withNextLabel(psAdvance(subj), subj.nextLabel + 1)
+    while psKind(cur) != 103 and psKind(cur) != 0 {
+        let vname = psText(cur)
+        let vtag = var_tag_of(vname)
+        if vtag < 0 { return psFail(cur) }             // only variant patterns are supported
+        if var_sum_of(vname) != sumTi { return psFail(cur) }
+        let payTi = var_pay_of(vname)
+        let p1 = psAdvance(cur)                        // past the variant name
+        let bindName = ""
+        let pAfter = p1
+        if psKind(p1) == 1 { bindName = psText(p1)  pAfter = psAdvance(p1) }
+        if psKind(pAfter) != 109 { return psFail(pAfter) }   // '->'
+        let pArrow = psAdvance(pAfter)
+        let lnext = pArrow.nextLabel
+        let pconst = psEmitConst(withNextLabel(pArrow, pArrow.nextLabel + 1), vtag)
+        let pcmp = psEmitCmp(pconst, "eq", tagSlot, pconst.resultTemp)
+        let pbrz = psEmit(pcmp, xi_brz(pcmp.resultTemp, lnext))   // tag mismatch -> next arm
+        let pbound = pbrz
+        if string_len(bindName) > 0 and payTi >= 0 { pbound = bindLocal(pbrz, bindName, tagSlot + 1, 3 + payTi) }
+        if psKind(pbound) != 102 { return psFail(pbound) }        // require a { block } body
+        let pbody = parseBlock(pbound)
+        if not pbody.ok { return pbody }
+        cur = psEmit(psEmit(pbody, xi_br(lend)), xi_label(lnext))
+        if psKind(cur) == 106 { cur = psAdvance(cur) }            // optional ','
+    }
+    if psKind(cur) != 103 { return psFail(cur) }                  // '}'
+    return psEmit(psAdvance(cur), xi_label(lend))
+}
+
 mapper parseStmt(ps: PS) -> PS {
     let k = psKind(ps)
     if k == 220 { return parseLet(ps) }
     if k == 221 { return parseReturn(ps) }
     if k == 222 { return parseIf(ps) }
     if k == 247 { return parseWhile(ps) }
+    if k == 224 { return parseMatch(ps) }                          // match <sum> { ... }
     if k == 238 { return parseDotStmt(ps) }                        // this.field = v  or  this.method(...)
     if k == 1 {
         let p1 = psAdvance(ps)
@@ -804,14 +893,16 @@ mapper lowerFunc(name: String, paramStr: String, retC: String, bodyTokens: Token
         let pp = parseNativeParams(paramStr)
         if not pp.ok { return FuncLower { ok: false, fn: dummyFn() } }
         names0 = pp.names
-        pkinds = pp.kinds
         let np = stringArrLen(pp.names)
         let i = 0
         while i < np {
             let kind = intArrGet(pp.kinds, i)
+            let w = slotWidth(kind)                     // paramKinds carries slot widths (registers to spill)
             slots0 = appendInt(slots0, nslots)
             kinds0 = appendInt(kinds0, kind)
-            if kind == 1 { nslots = nslots + 2  nregs = nregs + 2 } else { nslots = nslots + 1  nregs = nregs + 1 }
+            pkinds = appendInt(pkinds, w)
+            nslots = nslots + w
+            nregs = nregs + w
             i = i + 1
         }
         if nregs > 8 { return FuncLower { ok: false, fn: dummyFn() } }
@@ -840,18 +931,20 @@ mapper lowerMethod(className: String, ci: Integer, meth: MethodSpec) -> FuncLowe
     names0 = appendString(names0, "this")
     slots0 = appendInt(slots0, 0)
     kinds0 = appendInt(kinds0, 3 + ci)     // a class value, for field access
-    pkinds = appendInt(pkinds, 0)          // one register (the pointer)
+    pkinds = appendInt(pkinds, 1)          // `this` occupies one register (the pointer)
     let nslots = 1
     let nregs = 1
     let np = stringArrLen(pp.names)
     let i = 0
     while i < np {
         let kd = intArrGet(pp.kinds, i)
+        let w = slotWidth(kd)              // paramKinds carries slot widths
         names0 = appendString(names0, stringArrGet(pp.names, i))
         slots0 = appendInt(slots0, nslots)
         kinds0 = appendInt(kinds0, kd)
-        pkinds = appendInt(pkinds, kd)
-        if kd == 1 { nslots = nslots + 2  nregs = nregs + 2 } else { nslots = nslots + 1  nregs = nregs + 1 }
+        pkinds = appendInt(pkinds, w)
+        nslots = nslots + w
+        nregs = nregs + w
         i = i + 1
     }
     if nregs > 8 { return FuncLower { ok: false, fn: dummyFn() } }
@@ -881,6 +974,52 @@ producer addFields(ti: Integer, fields: String[]) {
     }
 }
 
+// Split "a:ct,b:ct" into ["a:ct", "b:ct"]; an empty string yields no fields.
+mapper splitCommas(s: String) -> String[] {
+    let out: String[] = []
+    let n = string_len(s)
+    let start = 0
+    let i = 0
+    while i <= n {
+        if i == n or string_char_at(s, i) == 44 {            // ',' or end
+            if i > start { out = appendString(out, string_slice(s, start, i)) }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Register sum types. A sum value is inline [tag, payload...]: the type is a
+// ctype of isRef 3 whose width is 1 (tag) + the widest variant's payload. Each
+// variant records its tag and a payload compound (its fields), keyed by name.
+producer registerSums(prog: Program) {
+    var_reset()
+    for t in prog.types {
+        if t.isSum {
+            let si = ctype_add(t.name, 3)
+            let tag = 0
+            let maxPay = 0
+            for v in t.variants {
+                let bar = findChar(v, 124)                    // '|' separating name from fields
+                let vname = string_slice(v, 0, bar)
+                let fstr = string_slice(v, bar + 1, string_len(v))
+                let payTi = 0 - 1
+                let payW = 0
+                if string_len(fstr) > 0 {
+                    payTi = ctype_add(t.name + "$" + vname, 0)
+                    addFields(payTi, splitCommas(fstr))
+                    payW = ctype_width(payTi)
+                }
+                var_add(vname, si, tag, payTi)
+                if payW > maxPay { maxPay = payW }
+                tag = tag + 1
+            }
+            ctype_set_width(si, 1 + maxPay)
+        }
+    }
+}
+
 // Register compound types (value), classes (heap ref, state layout), and the
 // module's interface->class binds.
 producer registerTypes(prog: Program) {
@@ -890,6 +1029,7 @@ producer registerTypes(prog: Program) {
         if t.isCompound { addFields(ctype_add(t.name, 0), t.fields) }
     }
     for ifc in prog.ifaces { ctype_add(ifc.name, 2) }          // interfaces (dispatch targets)
+    registerSums(prog)                                         // sum types + their variants
     for c in prog.classes { ctype_add(c.name, 1) }             // names first (so deps can resolve)
     iface_impl_reset()                                         // which classes implement each interface
     for c in prog.classes {

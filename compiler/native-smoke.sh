@@ -167,6 +167,12 @@ XC_OUT="$W" "$XC" --backend native "$W/gen.xi" >/dev/null 2>&1
 genout=$("$W/gen" 2>/dev/null | tr '\n' ' ')
 if [ "$genout" = "42 ok" ]; then echo "  ✓ generics: Box<Integer>->42, Box<String>->ok"; else echo "  ✗ generics printed \"$genout\""; fail=1; fi
 
+# Sum types + match: a tagged value passed by value, deconstructed by variant.
+printf 'type Expr = | Lit { v: Integer } | Add { a: Integer, b: Integer } | Zero\nmapper eval(e: Expr) -> Integer { match e { Lit l -> { return l.v }  Add p -> { return p.a + p.b }  Zero -> { return 0 } }  return 0 - 1 }\nextern "C" { producer xstd_put_int(n: Integer) }\nmodule M { entry main(args: String[]) -> Integer { xstd_put_int(eval(Lit { v: 7 }))  xstd_put_int(eval(Add { a: 20, b: 22 }))  xstd_put_int(eval(Zero))  return 0 } }\n' > "$W/sm.xi"
+XC_OUT="$W" "$XC" --backend native "$W/sm.xi" >/dev/null 2>&1
+smout=$("$W/sm" 2>/dev/null | tr '\n' ' ')
+if [ "$smout" = "7 42 0 " ]; then echo "  ✓ sum types: Lit 7, Add 20+22, Zero -> 7 42 0"; else echo "  ✗ sum types printed \"$smout\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1

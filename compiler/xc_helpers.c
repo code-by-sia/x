@@ -585,6 +585,30 @@ xc_integer_t ctype_index(xc_string_t name) {
     return -1;
 }
 xc_integer_t ctype_width(xc_integer_t ti) { return ct_width[(int)ti]; }
+void ctype_set_width(xc_integer_t ti, xc_integer_t w) { ct_width[(int)ti] = (int)w; }
+
+/* Sum-type variants: a variant name maps to its sum type (a ctype of isRef 3),
+ * its tag (variant index), and the ctype of its payload compound (-1 if none). */
+#define VAR_MAX 2048
+static xc_string_t var_name[VAR_MAX];
+static int var_sum[VAR_MAX], var_tag[VAR_MAX], var_pay[VAR_MAX];
+static int var_n = 0;
+void var_reset(void) { var_n = 0; }
+void var_add(xc_string_t name, xc_integer_t sumTi, xc_integer_t tag, xc_integer_t payTi) {
+    var_name[var_n] = name; var_sum[var_n] = (int)sumTi; var_tag[var_n] = (int)tag; var_pay[var_n] = (int)payTi; var_n++;
+}
+xc_integer_t var_sum_of(xc_string_t name) {
+    for (int i = 0; i < var_n; i++) if (ct_streq(var_name[i], name)) return var_sum[i];
+    return -1;
+}
+xc_integer_t var_tag_of(xc_string_t name) {
+    for (int i = 0; i < var_n; i++) if (ct_streq(var_name[i], name)) return var_tag[i];
+    return -1;
+}
+xc_integer_t var_pay_of(xc_string_t name) {
+    for (int i = 0; i < var_n; i++) if (ct_streq(var_name[i], name)) return var_pay[i];
+    return -1;
+}
 xc_integer_t ctype_field_off(xc_integer_t ti, xc_string_t fname) {
     int t = (int)ti;
     for (int f = 0; f < ct_nf[t]; f++) if (ct_streq(ct_fname[t][f], fname)) return ct_foff[t][f];
