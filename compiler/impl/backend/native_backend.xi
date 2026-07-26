@@ -519,6 +519,8 @@ mapper parsePrimary(ps: PS) -> PS {
     let k = psKind(ps)
     if k == 2 { return psEmitConst(psAdvance(ps), digitsToInt(psText(ps))) }
     if k == 3 { return psEmitFConst(psAdvance(ps), psText(ps)) }   // float literal -> Number
+    if k == 236 { return psEmitConst(psAdvance(ps), 1) }           // true
+    if k == 237 { return psEmitConst(psAdvance(ps), 0) }           // false
     if k == 4 {                                    // string literal -> pointer + length
         let ptrSlot = ps.nextSlot
         let a1 = psEmitStrAddr(ps, strpool_add(psText(ps)))
@@ -614,12 +616,59 @@ mapper parseVariantLit(ps: PS, vname: String) -> PS {
     return psKindResult(cur, base, 3 + sumTi)
 }
 
-// Postfix: array `.len`/`.cap`/`.data[i]`, or a compound field `.name`.
+// The extension-function key a scalar receiver carries: `recv.method(args)`
+// calls `<key>__method(recv, args)`. "" if the kind has no extension key here.
+mapper extKeyOf(kind: Integer) -> String {
+    if kind == 0 { return "Integer" }
+    if kind == 1 { return "String" }
+    if kind == numKind() { return "Number" }
+    return ""
+}
+
+// recv.method(args) on a scalar receiver -> <key>__method(recv, args), with the
+// receiver (one or two slots) as the first argument.
+mapper parseExtCall(ps: PS, key: String, method: String, recvSlot: Integer, recvKind: Integer) -> PS {
+    let callee = key + "__" + method
+    let cur = psAdvance(ps)                            // consume '('
+    let argSlots: Integer[] = []
+    let argFloats: Integer[] = []
+    let rw = slotWidth(recvKind)
+    let risf = 0
+    if recvKind == numKind() { risf = 1 }
+    let rj = 0
+    while rj < rw { argSlots = appendInt(argSlots, recvSlot + rj)  argFloats = appendInt(argFloats, risf)  rj = rj + 1 }
+    if psKind(cur) != 101 {
+        let r = parseOneArg(cur)
+        if not r.ps.ok { return r.ps }
+        cur = r.ps
+        argSlots = concatInts(argSlots, r.slots)
+        argFloats = concatInts(argFloats, r.isFloat)
+        while psKind(cur) == 106 {
+            let r2 = parseOneArg(psAdvance(cur))
+            if not r2.ps.ok { return r2.ps }
+            cur = r2.ps
+            argSlots = concatInts(argSlots, r2.slots)
+            argFloats = concatInts(argFloats, r2.isFloat)
+        }
+    }
+    if psKind(cur) != 101 { return psFail(cur) }       // ')'
+    if intArrLen(argSlots) > 8 { return psFail(cur) }
+    let p2 = psAdvance(cur)
+    return psEmitCallF(p2, callee, argSlots, argFloats, p2.nextSlot, callRetKind(callee))
+}
+
+// Postfix: extension call on a scalar, array `.len`/`.cap`/`.data[i]`, or a
+// compound/class field or method.
 mapper parsePostfix(ps: PS) -> PS {
     let cur = ps
     while psKind(cur) == 107 {                     // '.'
         let field = psText(psAdvance(cur))
         let after = psAdvance(psAdvance(cur))       // past '.' and the field name
+        let ekey = extKeyOf(cur.resultKind)
+        if string_len(ekey) > 0 and psKind(after) == 100 {   // scalar.method(args): extension call
+            cur = parseExtCall(after, ekey, field, cur.resultTemp, cur.resultKind)
+            if not cur.ok { return cur }
+        } else {
         if cur.resultKind >= 3 and cur.resultKind < 1000 {   // compound field, class field, or method
             let ti = cur.resultKind - 3
             if ctype_is_ref(ti) == 2 and psKind(after) == 100 {          // interface: dynamic dispatch
@@ -653,6 +702,7 @@ mapper parsePostfix(ps: PS) -> PS {
                     cur = psEmitAloadK(psAdvance(idx), ptrSlot, idx.resultTemp, elemKind)
                 } else { return psFail(cur) }
             }
+        }
         }
         }
     }
@@ -998,6 +1048,7 @@ mapper parseNativeParams(pstr: String) -> ParamParse {
             let name = trimStr(string_slice(piece, sp + 1, string_len(piece)))
             let kind = 0 - 1
             if pct == "xc_integer_t" { kind = 0 }
+            if pct == "xc_bool_t"    { kind = 0 }        // Bool is a 1-slot Integer
             if pct == "xc_string_t"  { kind = 1 }
             if pct == "xc_number_t"  { kind = numKind() }
             if kind < 0 and pct.startsWith2("xc_") and string_len(pct) > 5 {   // a class or interface value
@@ -1025,7 +1076,7 @@ mapper dummyFn() -> XFunc {
 // others bind params to the first slots (a String param takes two) and spill
 // them in the prologue. Integer and String returns are both allowed.
 mapper lowerFunc(name: String, paramStr: String, retC: String, bodyTokens: Token[], isEntry: Bool) -> FuncLower {
-    if retC != "xc_integer_t" and retC != "xc_string_t" and retC != "xc_number_t" { return FuncLower { ok: false, fn: dummyFn() } }
+    if retC != "xc_integer_t" and retC != "xc_bool_t" and retC != "xc_string_t" and retC != "xc_number_t" { return FuncLower { ok: false, fn: dummyFn() } }
     let names0: String[] = []
     let slots0: Integer[] = []
     let kinds0: Integer[] = []
@@ -1071,7 +1122,7 @@ mapper lowerFunc(name: String, paramStr: String, retC: String, bodyTokens: Token
 // return) gets a trailing return so the epilogue runs.
 mapper lowerMethod(className: String, ci: Integer, meth: MethodSpec) -> FuncLower {
     let retC = meth.retCtype
-    let isVoid = retC != "xc_integer_t" and retC != "xc_string_t" and retC != "xc_number_t"
+    let isVoid = retC != "xc_integer_t" and retC != "xc_bool_t" and retC != "xc_string_t" and retC != "xc_number_t"
     let pp = parseNativeParams(meth.params)
     if not pp.ok { return FuncLower { ok: false, fn: dummyFn() } }
     let names0: String[] = []

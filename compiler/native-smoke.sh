@@ -198,6 +198,13 @@ XC_OUT="$W" "$XC" --backend native "$W/so.xi" >/dev/null 2>&1
 soout=$("$W/so" 2>/dev/null | tr '\n' ' ')
 if [ "$soout" = "1 5 ell" ]; then echo "  ✓ string ops: ==, len 5, slice ell"; else echo "  ✗ string ops printed \"$soout\""; fail=1; fi
 
+# String extension method (predicate with a `this` receiver, Bool return) — the
+# same startsWith2 pattern the compiler itself uses.
+printf 'predicate String.startsWith2(prefix: String) { let pl = string_len(prefix)  if string_len(this) < pl { return false }  return string_slice(this, 0, pl) == prefix }\nextern "C" { producer xstd_put_int(n: Integer) }\nmodule M { entry main(args: String[]) -> Integer { let s = "hello world"  if s.startsWith2("hello") { xstd_put_int(1) }  if s.startsWith2("bye") { xstd_put_int(9) } else { xstd_put_int(0) }  return 0 } }\n' > "$W/xm.xi"
+XC_OUT="$W" "$XC" --backend native "$W/xm.xi" >/dev/null 2>&1
+xmout=$("$W/xm" 2>/dev/null | tr '\n' ' ')
+if [ "$xmout" = "1 0 " ]; then echo "  ✓ extension method: s.startsWith2 -> 1, 0"; else echo "  ✗ extension method printed \"$xmout\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1
