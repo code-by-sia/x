@@ -50,6 +50,7 @@ extern "C" {
     mapper   var_sum_of(name: String) -> Integer                        // the sum type index for a variant name, or -1
     mapper   var_tag_of(name: String) -> Integer                        // the variant's tag, or -1
     mapper   var_pay_of(name: String) -> Integer                        // the variant's payload compound index, or -1
+    mapper   f64_chunk(text: String, i: Integer) -> Integer             // i-th 16-bit chunk of a float literal's IEEE-754 bits
     mapper   ctype_field_off(ti: Integer, fname: String) -> Integer     // field slot offset, or -1
     mapper   ctype_field_kind(ti: Integer, fname: String) -> Integer    // field kind (0/1/2)
     mapper   ctype_nfields(ti: Integer) -> Integer                      // number of fields

@@ -36,6 +36,7 @@ type XVal = {
 
 mapper ximm(n: Integer)   -> XVal => XVal { kind: "imm",  imm: n, id: 0,  sym: "" }
 mapper xtemp(id: Integer) -> XVal => XVal { kind: "temp", imm: 0, id: id, sym: "" }
+mapper xftemp(id: Integer) -> XVal => XVal { kind: "ftemp", imm: 0, id: id, sym: "" }   // a float slot (passed in a d-register)
 mapper xarg(i: Integer)   -> XVal => XVal { kind: "arg",  imm: 0, id: i,  sym: "" }
 mapper xsym(s: String)    -> XVal => XVal { kind: "sym",  imm: 0, id: 0,  sym: s  }
 mapper xnone()            -> XVal => XVal { kind: "none", imm: 0, id: 0,  sym: "" }
@@ -102,6 +103,15 @@ mapper xi_const(dst: Integer, n: Integer) -> XInsn =>
 
 mapper xi_bin(op: String, dst: Integer, a: XVal, b: XVal) -> XInsn =>
     XInsn { op: op, typ: "i64", dst: dst, a: a, b: b, args: [], callee: "", tlabel: 0, flabel: 0 }
+
+// Float arithmetic on two float slots (op = fadd/fsub/fmul/fdiv), result to dst.
+mapper xi_fbin(op: String, dst: Integer, a: Integer, b: Integer) -> XInsn =>
+    XInsn { op: op, typ: "f64", dst: dst, a: xtemp(a), b: xtemp(b), args: [], callee: "", tlabel: 0, flabel: 0 }
+
+// Materialize a Number constant into dst from the four 16-bit chunks of its
+// IEEE-754 double bit pattern (low to high), carried in a.imm/b.imm/tlabel/flabel.
+mapper xi_fconst(dst: Integer, c0: Integer, c1: Integer, c2: Integer, c3: Integer) -> XInsn =>
+    XInsn { op: "fconst", typ: "f64", dst: dst, a: ximm(c0), b: ximm(c1), args: [], callee: "", tlabel: c2, flabel: c3 }
 
 mapper xi_ret(a: XVal) -> XInsn =>
     XInsn { op: "ret", typ: "void", dst: 0 - 1, a: a, b: xnone(), args: [], callee: "", tlabel: 0, flabel: 0 }

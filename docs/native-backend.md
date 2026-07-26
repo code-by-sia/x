@@ -36,6 +36,7 @@ The native backend is being built in stages behind the flag, with the C backend 
 - list injection: a `deps { xs: I[] }` dependency is built as an array holding one instance of every class that implements `I`; `xs.len` and `xs.data[i]` iterate it, and a method call on an element dispatches polymorphically;
 - generic interfaces: a parametric `interface Box<T>` is monomorphized (before either backend runs) into a distinct concrete interface per instantiation, so `Box<Integer>` and `Box<String>` are separate interfaces with separate implementors and return types; an unbound dependency auto-wires to the single class implementing its instantiation;
 - sum types and `match`: a `type T = | A { ... } | B | ...` value is laid out inline as a tag word plus the widest variant's payload; a variant is constructed by name (`A { f: v }` or a nullary `B`), passed by value, and deconstructed with `match`, which tests the tag and binds the payload in each arm;
+- `Number` (IEEE-754 double) arithmetic: a literal is materialized into a stack slot, and `+ - * /` are the hardware double instructions over the FP registers; a `Number` argument is passed in a `d`-register per the calling convention;
 - expressions over integer literals, parameters, locals, `+ - * / %`, comparisons (`== != < <= > >=`), and parentheses.
 
 Locals and parameters get dedicated stack slots (stable across loop iterations); expression temps get fresh slots; branches are resolved in a second pass, and calls follow the AArch64 convention (args in `x0`..`x7`, result in `x0`, `fp`/`lr` saved). The backend lays the functions out and patches every `BL` itself. Anything outside the subset (a string, a non-integer function, an unsupported operator) is reported and refused rather than mis-compiled:
@@ -91,6 +92,7 @@ Supporting a new arch_os is therefore additive: write an `InsnEncoder` for the i
 | List injection (`I[]` dependency of all implementors) | done |
 | Generic interfaces (monomorphized, auto-wired) | done |
 | Sum types and `match` (tag + payload, variant patterns) | done |
+| `Number` (double) arithmetic on the FP registers | done |
 | Full language coverage, diffed against the C backend | planned |
 | Self-host: compile the compiler with the native backend | planned |
 | Second target (Linux ELF, x86-64) | planned |

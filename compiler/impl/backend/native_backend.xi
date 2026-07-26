@@ -35,9 +35,14 @@ type PS = {
 
 // Stack slots a value of `kind` occupies: Integer 1, String 2, array 3, and a
 // compound (kind >= 3, i.e. type index kind-3) its registered width.
+// Number (a double) is a distinct 1-slot kind. A high sentinel keeps it clear of
+// the type range (3+ti) and the ref-array range (1000+ti).
+mapper numKind() -> Integer => 2000000
+
 mapper slotWidth(kind: Integer) -> Integer {
     if kind == 1 { return 2 }
     if kind == 2 { return 3 }
+    if kind == numKind() { return 1 }                  // a double occupies one slot
     if kind >= 1000 { return 3 }                       // an array of refs: { data, len, cap }
     if kind >= 3 {
         let r = ctype_is_ref(kind - 3)
@@ -70,6 +75,14 @@ mapper withNextLabel(ps: PS, n: Integer) -> PS {
 mapper psEmitConst(ps: PS, v: Integer) -> PS {
     let t = ps.nextSlot
     return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_const(t, v)), nextSlot: t + 1, resultTemp: t, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultKind: 0 }
+}
+mapper psEmitFConst(ps: PS, text: String) -> PS {
+    let t = ps.nextSlot
+    return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_fconst(t, f64_chunk(text, 0), f64_chunk(text, 1), f64_chunk(text, 2), f64_chunk(text, 3))), nextSlot: t + 1, resultTemp: t, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultKind: numKind() }
+}
+mapper psEmitFBin(ps: PS, op: String, a: Integer, b: Integer) -> PS {
+    let t = ps.nextSlot
+    return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_fbin(op, t, a, b)), nextSlot: t + 1, resultTemp: t, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultKind: numKind() }
 }
 mapper psEmitBin(ps: PS, op: String, a: Integer, b: Integer) -> PS {
     let t = ps.nextSlot
@@ -131,20 +144,36 @@ mapper cmpOpOf(k: Integer) -> String {
     return ""
 }
 
-mapper slotsToVals(slots: Integer[]) -> XVal[] {
+// Build call-argument values; a slot flagged float becomes an `ftemp` so the
+// encoder loads it into a d-register (the AAPCS float bank).
+mapper slotsToValsF(slots: Integer[], floats: Integer[]) -> XVal[] {
     let out: XVal[] = []
     let i = 0
     let n = intArrLen(slots)
-    while i < n { out = appendXVal(out, xtemp(intArrGet(slots, i)))  i = i + 1 }
+    while i < n {
+        if intArrGet(floats, i) == 1 { out = appendXVal(out, xftemp(intArrGet(slots, i))) }
+        else { out = appendXVal(out, xtemp(intArrGet(slots, i))) }
+        i = i + 1
+    }
+    return out
+}
+mapper zeroFlags(n: Integer) -> Integer[] {
+    let out: Integer[] = []
+    let i = 0
+    while i < n { out = appendInt(out, 0)  i = i + 1 }
     return out
 }
 // Emit a call. A String result (retStr) comes back in x0:x1 and takes two slots.
-mapper psEmitCall(ps: PS, callee: String, argSlots: Integer[], dst: Integer, retStr: Bool) -> PS {
+// `argFloats` marks which arg slots are doubles (routed to d-registers).
+mapper psEmitCallF(ps: PS, callee: String, argSlots: Integer[], argFloats: Integer[], dst: Integer, retStr: Bool) -> PS {
     let typ = "i64"
     let ns = dst + 1
     let rk = 0
     if retStr { typ = "str"  ns = dst + 2  rk = 1 }
-    return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_call(dst, callee, slotsToVals(argSlots), typ)), nextSlot: ns, resultTemp: dst, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultKind: rk }
+    return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_call(dst, callee, slotsToValsF(argSlots, argFloats), typ)), nextSlot: ns, resultTemp: dst, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultKind: rk }
+}
+mapper psEmitCall(ps: PS, callee: String, argSlots: Integer[], dst: Integer, retStr: Bool) -> PS {
+    return psEmitCallF(ps, callee, argSlots, zeroFlags(intArrLen(argSlots)), dst, retStr)
 }
 
 mapper psEmitStrAddr(ps: PS, strid: Integer) -> PS {
@@ -264,21 +293,25 @@ mapper parseResolve(ps: PS) -> PS {
 mapper parseMethodArgs(ps: PS, selfSlot: Integer) -> ArgResult {
     let cur = psAdvance(ps)                            // consume '('
     let argSlots: Integer[] = []
+    let argFloats: Integer[] = []
     argSlots = appendInt(argSlots, selfSlot)          // `this`
+    argFloats = appendInt(argFloats, 0)               // the object pointer, not a float
     if psKind(cur) != 101 {
         let r = parseOneArg(cur)
-        if not r.ps.ok { return ArgResult { ps: r.ps, slots: argSlots } }
+        if not r.ps.ok { return ArgResult { ps: r.ps, slots: argSlots, isFloat: argFloats } }
         cur = r.ps
         argSlots = concatInts(argSlots, r.slots)
+        argFloats = concatInts(argFloats, r.isFloat)
         while psKind(cur) == 106 {
             let r2 = parseOneArg(psAdvance(cur))
-            if not r2.ps.ok { return ArgResult { ps: r2.ps, slots: argSlots } }
+            if not r2.ps.ok { return ArgResult { ps: r2.ps, slots: argSlots, isFloat: argFloats } }
             cur = r2.ps
             argSlots = concatInts(argSlots, r2.slots)
+            argFloats = concatInts(argFloats, r2.isFloat)
         }
     }
-    if psKind(cur) != 101 { return ArgResult { ps: psFail(cur), slots: argSlots } }   // ')'
-    return ArgResult { ps: psAdvance(cur), slots: argSlots }
+    if psKind(cur) != 101 { return ArgResult { ps: psFail(cur), slots: argSlots, isFloat: argFloats } }   // ')'
+    return ArgResult { ps: psAdvance(cur), slots: argSlots, isFloat: argFloats }
 }
 
 // c.method(args): a static call to <Class>_<method> with the object as arg 0.
@@ -287,7 +320,7 @@ mapper parseMethodCall(ps: PS, className: String, method: String, selfSlot: Inte
     if not a.ps.ok { return a.ps }
     if intArrLen(a.slots) > 8 { return psFail(a.ps) }
     let callee = className + "_" + method
-    return psEmitCall(a.ps, callee, a.slots, a.ps.nextSlot, fnsig_ret_str(callee) == 1)
+    return psEmitCallF(a.ps, callee, a.slots, a.isFloat, a.ps.nextSlot, fnsig_ret_str(callee) == 1)
 }
 
 // x.method(args) where x is an interface value: dispatch on the object's
@@ -316,7 +349,7 @@ mapper parseDynMethodCall(ps: PS, ii: Integer, method: String, selfSlot: Integer
         let pc = psEmitConst(withNextLabel(cur, cur.nextLabel + 1), cci)
         let pe = psEmitCmp(pc, "eq", hdr, pc.resultTemp)
         let pb = psEmit(pe, xi_brz(pe.resultTemp, lnext))        // not this class -> next arm
-        let pcall = psEmitCall(pb, ctype_name(cci) + "_" + method, a.slots, pb.nextSlot, retStr)
+        let pcall = psEmitCallF(pb, ctype_name(cci) + "_" + method, a.slots, a.isFloat, pb.nextSlot, retStr)
         let pcp = pcall
         let j = 0
         while j < rw { pcp = psEmit(pcp, xi_copy(rslot + j, pcall.resultTemp + j))  j = j + 1 }
@@ -415,45 +448,53 @@ mapper parseArrayLit(ps: PS) -> PS {
     return psEmitArrayLit(psAdvance(cur), elemSlots)
 }
 
-// One call argument: its value slot, plus a second slot (the length) if String.
-type ArgResult = { ps: PS, slots: Integer[] }
+// One call argument: its value slot(s), plus a parallel per-slot float flag (a
+// Number occupies one slot and is passed in a d-register).
+type ArgResult = { ps: PS, slots: Integer[], isFloat: Integer[] }
 mapper parseOneArg(ps: PS) -> ArgResult {
     let e = parseExpr(ps)
     let sl: Integer[] = []
+    let fl: Integer[] = []
     if e.ok {
         let w = slotWidth(e.resultKind)
+        let isf = 0
+        if e.resultKind == numKind() { isf = 1 }
         let j = 0
-        while j < w { sl = appendInt(sl, e.resultTemp + j)  j = j + 1 }
+        while j < w { sl = appendInt(sl, e.resultTemp + j)  fl = appendInt(fl, isf)  j = j + 1 }
     }
-    return ArgResult { ps: e, slots: sl }
+    return ArgResult { ps: e, slots: sl, isFloat: fl }
 }
 
 // call := IDENT '(' (arg (',' arg)*)? ')'   — ps is positioned at '('
 mapper parseCall(ps: PS, name: String) -> PS {
     let cur = psAdvance(ps)                       // consume '('
     let argSlots: Integer[] = []
+    let argFloats: Integer[] = []
     if psKind(cur) != 101 {
         let r = parseOneArg(cur)
         if not r.ps.ok { return r.ps }
         cur = r.ps
         argSlots = concatInts(argSlots, r.slots)
+        argFloats = concatInts(argFloats, r.isFloat)
         while psKind(cur) == 106 {                // ','
             let r2 = parseOneArg(psAdvance(cur))
             if not r2.ps.ok { return r2.ps }
             cur = r2.ps
             argSlots = concatInts(argSlots, r2.slots)
+            argFloats = concatInts(argFloats, r2.isFloat)
         }
     }
     if psKind(cur) != 101 { return psFail(cur) }  // ')'
     if intArrLen(argSlots) > 8 { return psFail(cur) }
     let p2 = psAdvance(cur)
-    return psEmitCall(p2, name, argSlots, p2.nextSlot, fnsig_ret_str(name) == 1)
+    return psEmitCallF(p2, name, argSlots, argFloats, p2.nextSlot, fnsig_ret_str(name) == 1)
 }
 
 // primary := INT | STRING | IDENT | call | '(' expr ')'
 mapper parsePrimary(ps: PS) -> PS {
     let k = psKind(ps)
     if k == 2 { return psEmitConst(psAdvance(ps), digitsToInt(psText(ps))) }
+    if k == 3 { return psEmitFConst(psAdvance(ps), psText(ps)) }   // float literal -> Number
     if k == 4 {                                    // string literal -> pointer + length
         let ptrSlot = ps.nextSlot
         let a1 = psEmitStrAddr(ps, strpool_add(psText(ps)))
@@ -599,13 +640,24 @@ mapper parseMul(ps: PS) -> PS {
     let cur = parsePrimary(ps)
     if not cur.ok { return cur }
     while (psKind(cur) == 120) or (psKind(cur) == 121) or (psKind(cur) == 122) {
+        let isDiv = psKind(cur) == 121
+        let isMod = psKind(cur) == 122
         let op = "mul"
-        if psKind(cur) == 121 { op = "sdiv" }
-        if psKind(cur) == 122 { op = "smod" }
+        if isDiv { op = "sdiv" }
+        if isMod { op = "smod" }
+        let leftNum = cur.resultKind == numKind()
         let left = cur.resultTemp
         let rhs = parsePrimary(psAdvance(cur))
         if not rhs.ok { return rhs }
-        cur = psEmitBin(rhs, op, left, rhs.resultTemp)
+        if leftNum or rhs.resultKind == numKind() {
+            if not (leftNum and rhs.resultKind == numKind()) { return psFail(rhs) }   // no Integer/Number mixing
+            if isMod { return psFail(rhs) }                                           // no float remainder
+            let fop = "fmul"
+            if isDiv { fop = "fdiv" }
+            cur = psEmitFBin(rhs, fop, left, rhs.resultTemp)
+        } else {
+            cur = psEmitBin(rhs, op, left, rhs.resultTemp)
+        }
     }
     return cur
 }
@@ -617,15 +669,23 @@ mapper parseAdd(ps: PS) -> PS {
     while (psKind(cur) == 118) or (psKind(cur) == 119) {
         let isAdd = psKind(cur) == 118
         let leftStr = cur.resultKind == 1
+        let leftNum = cur.resultKind == numKind()
         let left = cur.resultTemp
         let rhs = parseMul(psAdvance(cur))
         if not rhs.ok { return rhs }
         if isAdd and leftStr and rhs.resultKind == 1 {
             cur = psEmitConcat(rhs, left, rhs.resultTemp)   // String + String
         } else {
-            let op = "add"
-            if not isAdd { op = "sub" }
-            cur = psEmitBin(rhs, op, left, rhs.resultTemp)
+            if leftNum or rhs.resultKind == numKind() {
+                if not (leftNum and rhs.resultKind == numKind()) { return psFail(rhs) }   // no Integer/Number mixing
+                let fop = "fadd"
+                if not isAdd { fop = "fsub" }
+                cur = psEmitFBin(rhs, fop, left, rhs.resultTemp)
+            } else {
+                let op = "add"
+                if not isAdd { op = "sub" }
+                cur = psEmitBin(rhs, op, left, rhs.resultTemp)
+            }
         }
     }
     return cur

@@ -609,6 +609,17 @@ xc_integer_t var_pay_of(xc_string_t name) {
     for (int i = 0; i < var_n; i++) if (ct_streq(var_name[i], name)) return var_pay[i];
     return -1;
 }
+
+/* The i-th 16-bit chunk (0 = low) of the IEEE-754 double encoding of a float
+ * literal's text — so the native encoder can build the pattern with movz/movk. */
+xc_integer_t f64_chunk(xc_string_t text, xc_integer_t i) {
+    char buf[64];
+    int n = (int)text.len; if (n > 63) n = 63;
+    memcpy(buf, text.data, n); buf[n] = 0;
+    double d = strtod(buf, NULL);
+    unsigned long long bits; memcpy(&bits, &d, 8);
+    return (xc_integer_t)((bits >> (16 * (int)i)) & 0xFFFFu);
+}
 xc_integer_t ctype_field_off(xc_integer_t ti, xc_string_t fname) {
     int t = (int)ti;
     for (int f = 0; f < ct_nf[t]; f++) if (ct_streq(ct_fname[t][f], fname)) return ct_foff[t][f];

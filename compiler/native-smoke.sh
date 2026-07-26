@@ -173,6 +173,12 @@ XC_OUT="$W" "$XC" --backend native "$W/sm.xi" >/dev/null 2>&1
 smout=$("$W/sm" 2>/dev/null | tr '\n' ' ')
 if [ "$smout" = "7 42 0 " ]; then echo "  ✓ sum types: Lit 7, Add 20+22, Zero -> 7 42 0"; else echo "  ✗ sum types printed \"$smout\""; fail=1; fi
 
+# Number (double) arithmetic: fadd/fmul/fdiv over FP registers, passed in a d-register.
+printf 'extern "C" { producer xstd_put_num(n: Number) }\nmodule M { entry main(args: String[]) -> Integer { xstd_put_num(2.0 * 3.0)  xstd_put_num(10.0 / 4.0)  return 0 } }\n' > "$W/nm.xi"
+XC_OUT="$W" "$XC" --backend native "$W/nm.xi" >/dev/null 2>&1
+nmout=$("$W/nm" 2>/dev/null | tr '\n' ' ')
+if [ "$nmout" = "6 2.5 " ]; then echo "  ✓ number: 2.0*3.0=6, 10.0/4.0=2.5"; else echo "  ✗ number printed \"$nmout\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1

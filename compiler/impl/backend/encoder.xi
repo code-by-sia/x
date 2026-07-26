@@ -27,6 +27,14 @@ mapper aMovz(reg: Integer, imm: Integer, hw: Integer) -> Integer => 3531603968 +
 mapper aMovk(reg: Integer, imm: Integer, hw: Integer) -> Integer => 4068474880 + hw * 2097152 + imm * 32 + reg
 mapper aStrSp(rt: Integer, off: Integer)  -> Integer => 4177526784 + (off / 8) * 1024 + 31 * 32 + rt
 mapper aLdrSp(rt: Integer, off: Integer)  -> Integer => 4181721088 + (off / 8) * 1024 + 31 * 32 + rt
+// Double-precision FP load/store and arithmetic (d-registers), validated against
+// the assembler.  ldr/str dRt,[sp,#off];  f<op> dRd,dRn,dRm.
+mapper aStrD(rt: Integer, off: Integer)   -> Integer => 4244635648 + (off / 8) * 1024 + 31 * 32 + rt
+mapper aLdrD(rt: Integer, off: Integer)   -> Integer => 4248829952 + (off / 8) * 1024 + 31 * 32 + rt
+mapper aFadd(rd: Integer, rn: Integer, rm: Integer) -> Integer => 509618176 + rm * 65536 + rn * 32 + rd
+mapper aFsub(rd: Integer, rn: Integer, rm: Integer) -> Integer => 509622272 + rm * 65536 + rn * 32 + rd
+mapper aFmul(rd: Integer, rn: Integer, rm: Integer) -> Integer => 509609984 + rm * 65536 + rn * 32 + rd
+mapper aFdiv(rd: Integer, rn: Integer, rm: Integer) -> Integer => 509614080 + rm * 65536 + rn * 32 + rd
 mapper aAdd(rd: Integer, rn: Integer, rm: Integer) -> Integer => 2332033024 + rm * 65536 + rn * 32 + rd
 mapper aSub(rd: Integer, rn: Integer, rm: Integer) -> Integer => 3405774848 + rm * 65536 + rn * 32 + rd
 mapper aMul(rd: Integer, rn: Integer, rm: Integer) -> Integer => 2600468480 + rm * 65536 + 31 * 1024 + rn * 32 + rd
@@ -91,6 +99,26 @@ mapper emitInsn(ws: Integer[], ins: XInsn, locals: Integer) -> Integer[] {
     if ins.op == "const" {
         let w1 = matConst(ws, 9, ins.a.imm)
         return appendInt(w1, aStrSp(9, ins.dst * 8))
+    }
+    if ins.op == "fconst" {                               // build the 64-bit double pattern in x9, store its bits
+        let w0 = appendInt(ws, aMovz(9, ins.a.imm, 0))
+        let w1 = w0
+        if ins.b.imm != 0 { w1 = appendInt(w0, aMovk(9, ins.b.imm, 1)) }
+        let w2 = w1
+        if ins.tlabel != 0 { w2 = appendInt(w1, aMovk(9, ins.tlabel, 2)) }
+        let w3 = w2
+        if ins.flabel != 0 { w3 = appendInt(w2, aMovk(9, ins.flabel, 3)) }
+        return appendInt(w3, aStrSp(9, ins.dst * 8))
+    }
+    if ins.op == "fadd" or ins.op == "fsub" or ins.op == "fmul" or ins.op == "fdiv" {
+        let w1 = appendInt(ws, aLdrD(0, ins.a.id * 8))
+        let w2 = appendInt(w1, aLdrD(1, ins.b.id * 8))
+        let w3 = w2
+        if ins.op == "fadd" { w3 = appendInt(w2, aFadd(0, 0, 1)) }
+        if ins.op == "fsub" { w3 = appendInt(w2, aFsub(0, 0, 1)) }
+        if ins.op == "fmul" { w3 = appendInt(w2, aFmul(0, 0, 1)) }
+        if ins.op == "fdiv" { w3 = appendInt(w2, aFdiv(0, 0, 1)) }
+        return appendInt(w3, aStrD(0, ins.dst * 8))
     }
     if ins.op == "copy" {
         let w1 = appendInt(ws, aLdrSp(9, ins.a.id * 8))
@@ -211,10 +239,16 @@ mapper encodeArm64(f: XFunc) -> EncResult {
                         ws = appendInt(ws, 0)
                     } else {
                         if ins.op == "call" {
-                            let ai = 0
+                            let xr = 0                          // integer arg registers x0..
+                            let dr = 0                          // float arg registers d0..
                             for a in ins.args {
-                                ws = appendInt(ws, aLdrSp(ai, a.id * 8))
-                                ai = ai + 1
+                                if a.kind == "ftemp" {
+                                    ws = appendInt(ws, aLdrD(dr, a.id * 8))
+                                    dr = dr + 1
+                                } else {
+                                    ws = appendInt(ws, aLdrSp(xr, a.id * 8))
+                                    xr = xr + 1
+                                }
                             }
                             cSites = appendInt(cSites, intArrLen(ws))
                             cSyms = appendString(cSyms, ins.callee)
