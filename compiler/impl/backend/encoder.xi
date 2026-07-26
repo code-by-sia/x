@@ -142,7 +142,9 @@ mapper emitInsn(ws: Integer[], ins: XInsn, locals: Integer) -> Integer[] {
         return appendInt(w2, aStrSp(11, ins.dst * 8))
     }
     if ins.op == "ret" {
-        let w1 = appendInt(ws, aLdrSp(0, ins.a.id * 8))
+        let w1 = ws
+        if ins.typ == "f64" { w1 = appendInt(ws, aLdrD(0, ins.a.id * 8)) }            // Number: d0
+        else { w1 = appendInt(ws, aLdrSp(0, ins.a.id * 8)) }
         let w1b = w1
         if ins.typ == "str" { w1b = appendInt(w1, aLdrSp(1, (ins.a.id + 1) * 8)) }   // String: also x1
         let w2 = w1b
@@ -191,14 +193,20 @@ mapper encodeArm64(f: XFunc) -> EncResult {
     ws = appendInt(ws, 2847898621)                        // stp x29,x30,[sp,#-16]!
     if locals > 0 { ws = appendInt(ws, aSubSp(locals)) }
     let np = stringArrLen(f.params)                                        // spill params to slots
-    let preg = 0
+    let preg = 0                                                           // integer arg registers x0..
+    let dreg = 0                                                           // float arg registers d0..
     let pslot = 0
     let pi = 0
     while pi < np {
-        let pw = intArrGet(f.paramKinds, pi)                               // slot width (registers to spill)
-        let pj = 0
-        while pj < pw { ws = appendInt(ws, aStrSp(preg + pj, (pslot + pj) * 8))  pj = pj + 1 }
-        preg = preg + pw  pslot = pslot + pw
+        let pw = intArrGet(f.paramKinds, pi)                               // slot width, or -1 for a Number (d-register)
+        if pw < 0 {
+            ws = appendInt(ws, aStrD(dreg, pslot * 8))
+            dreg = dreg + 1  pslot = pslot + 1
+        } else {
+            let pj = 0
+            while pj < pw { ws = appendInt(ws, aStrSp(preg + pj, (pslot + pj) * 8))  pj = pj + 1 }
+            preg = preg + pw  pslot = pslot + pw
+        }
         pi = pi + 1
     }
 
@@ -253,7 +261,8 @@ mapper encodeArm64(f: XFunc) -> EncResult {
                             cSites = appendInt(cSites, intArrLen(ws))
                             cSyms = appendString(cSyms, ins.callee)
                             ws = appendInt(ws, 0)                       // bl placeholder
-                            ws = appendInt(ws, aStrSp(0, ins.dst * 8))  // store x0
+                            if ins.typ == "f64" { ws = appendInt(ws, aStrD(0, ins.dst * 8)) }          // Number result: d0
+                            else { ws = appendInt(ws, aStrSp(0, ins.dst * 8)) }                        // store x0
                             if ins.typ == "str" { ws = appendInt(ws, aStrSp(1, (ins.dst + 1) * 8)) }   // string: also x1 (len)
                         } else {
                             ws = emitInsn(ws, ins, locals)

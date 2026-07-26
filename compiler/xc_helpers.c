@@ -499,16 +499,19 @@ static xc_string_t g_fnsig_name[8192];
 static int g_fnsig_ret[8192];
 static int g_fnsig_n = 0;
 void fnsig_reset(void) { g_fnsig_n = 0; }
-void fnsig_add(xc_string_t name, xc_integer_t retStr) {
-    g_fnsig_name[g_fnsig_n] = name; g_fnsig_ret[g_fnsig_n] = (int)retStr; g_fnsig_n++;
+/* retKind: 0 = Integer/void, 1 = String, 2 = Number (double). */
+void fnsig_add(xc_string_t name, xc_integer_t retKind) {
+    g_fnsig_name[g_fnsig_n] = name; g_fnsig_ret[g_fnsig_n] = (int)retKind; g_fnsig_n++;
 }
-xc_integer_t fnsig_ret_str(xc_string_t name) {
+static int fnsig_kind(xc_string_t name) {
     for (int i = g_fnsig_n - 1; i >= 0; i--) {
         if (g_fnsig_name[i].len == name.len && memcmp(g_fnsig_name[i].data, name.data, name.len) == 0)
             return g_fnsig_ret[i];
     }
     return 0;
 }
+xc_integer_t fnsig_ret_str(xc_string_t name) { return fnsig_kind(name) == 1 ? 1 : 0; }
+xc_integer_t fnsig_ret_num(xc_string_t name) { return fnsig_kind(name) == 2 ? 1 : 0; }
 
 /* Compound-type registry for the native backend: each type's fields, their kind
  * (0 Integer, 1 String, 2 array), and their slot offset within the value. */
