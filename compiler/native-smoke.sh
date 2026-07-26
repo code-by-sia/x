@@ -180,6 +180,12 @@ XC_OUT="$W" "$XC" --backend native "$W/nm.xi" >/dev/null 2>&1
 nmout=$("$W/nm" 2>/dev/null | tr '\n' ' ')
 if [ "$nmout" = "6 2.5 12 " ]; then echo "  ✓ number: 2*3=6, 10/4=2.5, scale(3,4)=12"; else echo "  ✗ number printed \"$nmout\""; fail=1; fi
 
+# Number comparisons: fcmp drives if/else and while over doubles.
+printf 'mapper rel(x: Number, y: Number) -> Integer { if x < y { return 1 }  if x > y { return 2 }  return 3 }\nextern "C" { producer xstd_put_int(n: Integer) }\nmodule M { entry main(args: String[]) -> Integer { xstd_put_int(rel(1.0, 2.0))  xstd_put_int(rel(3.5, 1.0))  xstd_put_int(rel(2.0, 2.0))  return 0 } }\n' > "$W/nc.xi"
+XC_OUT="$W" "$XC" --backend native "$W/nc.xi" >/dev/null 2>&1
+ncout=$("$W/nc" 2>/dev/null | tr '\n' ' ')
+if [ "$ncout" = "1 2 3 " ]; then echo "  ✓ number compare: <, >, == -> 1 2 3"; else echo "  ✗ number compare printed \"$ncout\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1

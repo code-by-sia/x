@@ -144,6 +144,10 @@ mapper xi_copy(dst: Integer, src: Integer) -> XInsn =>
 mapper xi_cmp(op: String, dst: Integer, a: Integer, b: Integer) -> XInsn =>
     XInsn { op: op, typ: "i64", dst: dst, a: xtemp(a), b: xtemp(b), args: [], callee: "", tlabel: 0, flabel: 0 }
 
+// The same comparison over two Number slots (fcmp), result is an Integer 0/1.
+mapper xi_fcmp(op: String, dst: Integer, a: Integer, b: Integer) -> XInsn =>
+    XInsn { op: op, typ: "f64", dst: dst, a: xtemp(a), b: xtemp(b), args: [], callee: "", tlabel: 0, flabel: 0 }
+
 // A branch target marker (emits no code; records its word offset).
 mapper xi_label(id: Integer) -> XInsn =>
     XInsn { op: "label", typ: "void", dst: 0 - 1, a: xnone(), b: xnone(), args: [], callee: "", tlabel: id, flabel: 0 }

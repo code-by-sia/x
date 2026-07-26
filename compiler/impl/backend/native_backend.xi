@@ -92,6 +92,10 @@ mapper psEmitCmp(ps: PS, op: String, a: Integer, b: Integer) -> PS {
     let t = ps.nextSlot
     return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_cmp(op, t, a, b)), nextSlot: t + 1, resultTemp: t, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultKind: 0 }
 }
+mapper psEmitFCmp(ps: PS, op: String, a: Integer, b: Integer) -> PS {
+    let t = ps.nextSlot
+    return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_fcmp(op, t, a, b)), nextSlot: t + 1, resultTemp: t, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultKind: 0 }
+}
 // Declare a local. A String local (kind 1) reserves two slots (pointer, length).
 mapper declareLocal(ps: PS, name: String, kind: Integer) -> PS {
     let slot = ps.nextSlot
@@ -707,9 +711,14 @@ mapper parseExpr(ps: PS) -> PS {
     if not cur.ok { return cur }
     let op = cmpOpOf(psKind(cur))
     if string_len(op) > 0 {
+        let leftNum = cur.resultKind == numKind()
         let left = cur.resultTemp
         let rhs = parseAdd(psAdvance(cur))
         if not rhs.ok { return rhs }
+        if leftNum or rhs.resultKind == numKind() {
+            if not (leftNum and rhs.resultKind == numKind()) { return psFail(rhs) }   // no Integer/Number mixing
+            return psEmitFCmp(rhs, op, left, rhs.resultTemp)
+        }
         return psEmitCmp(rhs, op, left, rhs.resultTemp)
     }
     return cur

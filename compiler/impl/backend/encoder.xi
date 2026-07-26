@@ -35,6 +35,7 @@ mapper aFadd(rd: Integer, rn: Integer, rm: Integer) -> Integer => 509618176 + rm
 mapper aFsub(rd: Integer, rn: Integer, rm: Integer) -> Integer => 509622272 + rm * 65536 + rn * 32 + rd
 mapper aFmul(rd: Integer, rn: Integer, rm: Integer) -> Integer => 509609984 + rm * 65536 + rn * 32 + rd
 mapper aFdiv(rd: Integer, rn: Integer, rm: Integer) -> Integer => 509614080 + rm * 65536 + rn * 32 + rd
+mapper aFcmp(rn: Integer, rm: Integer) -> Integer => 509616128 + rm * 65536 + rn * 32
 mapper aAdd(rd: Integer, rn: Integer, rm: Integer) -> Integer => 2332033024 + rm * 65536 + rn * 32 + rd
 mapper aSub(rd: Integer, rn: Integer, rm: Integer) -> Integer => 3405774848 + rm * 65536 + rn * 32 + rd
 mapper aMul(rd: Integer, rn: Integer, rm: Integer) -> Integer => 2600468480 + rm * 65536 + 31 * 1024 + rn * 32 + rd
@@ -153,6 +154,13 @@ mapper emitInsn(ws: Integer[], ins: XInsn, locals: Integer) -> Integer[] {
         return appendInt(w3, 3596551104)                  // ret
     }
     if isCmp(ins.op) {
+        if ins.typ == "f64" {                             // Number comparison: fcmp over d-registers
+            let f1 = appendInt(ws, aLdrD(0, ins.a.id * 8))
+            let f2 = appendInt(f1, aLdrD(1, ins.b.id * 8))
+            let f3 = appendInt(f2, aFcmp(0, 1))
+            let f4 = appendInt(f3, aCset(9, invCond(ins.op)))   // ordered floats share the signed condition codes
+            return appendInt(f4, aStrSp(9, ins.dst * 8))
+        }
         let w1 = appendInt(ws, aLdrSp(9, ins.a.id * 8))
         let w2 = appendInt(w1, aLdrSp(10, ins.b.id * 8))
         let w3 = appendInt(w2, aCmp(9, 10))
