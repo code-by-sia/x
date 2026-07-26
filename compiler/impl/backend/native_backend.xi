@@ -811,6 +811,40 @@ mapper parseWhile(ps: PS) -> PS {
     return psEmit(p5, xi_label(lEnd))
 }
 
+// for x in <array> { body } — an index walk over the fat pointer: the loop var
+// is bound to data[i] with the element's kind (an Integer, or a class/interface
+// ref for a ref array, so `x.method()` dispatches).
+mapper parseForIn(ps: PS) -> PS {
+    let p1 = psAdvance(ps)                          // consume 'for'
+    if psKind(p1) != 1 { return psFail(p1) }
+    let varName = psText(p1)
+    let p2 = psAdvance(p1)
+    if psKind(p2) != 229 { return psFail(p2) }      // 'in'
+    let coll = parseExpr(psAdvance(p2))
+    if not coll.ok { return coll }
+    let ak = coll.resultKind
+    let elemKind = 0
+    if ak >= 1000 { elemKind = 3 + (ak - 1000) }    // ref array element
+    else { if ak != 2 { return psFail(coll) } }     // else must be Integer[]
+    let arrBase = coll.resultTemp                   // data / len / cap
+    let lenSlot = arrBase + 1
+    let iSlot = coll.nextSlot
+    let xSlot = coll.nextSlot + 1
+    let pinit = psEmit(bumpSlots(coll, 2), xi_const(iSlot, 0))       // i = 0; reserve i and x
+    let pbind = bindLocal(pinit, varName, xSlot, elemKind)
+    let lStart = pbind.nextLabel
+    let lEnd = pbind.nextLabel + 1
+    let pstart = psEmit(withNextLabel(pbind, pbind.nextLabel + 2), xi_label(lStart))
+    let pcmp = psEmitCmp(pstart, "slt", iSlot, lenSlot)              // i < len
+    let pbrz = psEmit(pcmp, xi_brz(pcmp.resultTemp, lEnd))
+    let pload = psEmit(pbrz, xi_aload(xSlot, arrBase, iSlot))        // x = data[i]
+    let pbody = parseBlock(pload)
+    if not pbody.ok { return pbody }
+    let pinc = psEmitBin(psEmitConst(pbody, 1), "add", iSlot, pbody.nextSlot)   // i = i + 1
+    let pstore = psEmit(pinc, xi_copy(iSlot, pinc.resultTemp))
+    return psEmit(psEmit(pstore, xi_br(lStart)), xi_label(lEnd))
+}
+
 // match <sum-expr> { Variant [binding] -> { body } ... } — a tag test per arm,
 // binding the payload before running the arm, lowered to a compare/branch chain.
 mapper parseMatch(ps: PS) -> PS {
@@ -857,6 +891,7 @@ mapper parseStmt(ps: PS) -> PS {
     if k == 221 { return parseReturn(ps) }
     if k == 222 { return parseIf(ps) }
     if k == 247 { return parseWhile(ps) }
+    if k == 246 { return parseForIn(ps) }                          // for x in <array> { ... }
     if k == 224 { return parseMatch(ps) }                          // match <sum> { ... }
     if k == 238 { return parseDotStmt(ps) }                        // this.field = v  or  this.method(...)
     if k == 1 {

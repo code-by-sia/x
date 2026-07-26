@@ -186,6 +186,12 @@ XC_OUT="$W" "$XC" --backend native "$W/nc.xi" >/dev/null 2>&1
 ncout=$("$W/nc" 2>/dev/null | tr '\n' ' ')
 if [ "$ncout" = "1 2 3 " ]; then echo "  ✓ number compare: <, >, == -> 1 2 3"; else echo "  ✗ number compare printed \"$ncout\""; fail=1; fi
 
+# for x in <array>: index walk over Integer[] and (with dispatch) a ref array.
+printf 'extern "C" { producer xstd_put_int(n: Integer) }\nmodule M { entry main(args: String[]) -> Integer { let s = 0  for x in [4, 5, 6] { s = s + x }  xstd_put_int(s)  return 0 } }\n' > "$W/fe.xi"
+XC_OUT="$W" "$XC" --backend native "$W/fe.xi" >/dev/null 2>&1
+feout=$("$W/fe" 2>/dev/null)
+if [ "$feout" = "15" ]; then echo "  ✓ for-in: sum [4,5,6] = 15"; else echo "  ✗ for-in printed \"$feout\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1

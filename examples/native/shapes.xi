@@ -32,10 +32,8 @@ class Summer implements Report {
     deps { shapes: Shape[] }
     projector total() -> Integer {
         let sum = 0
-        let i = 0
-        while i < shapes.len {
-            sum = sum + shapes.data[i].area()   // dispatched per element at runtime
-            i = i + 1
+        for s in shapes {
+            sum = sum + s.area()   // s is a Shape; dispatched per element at runtime
         }
         return sum
     }
