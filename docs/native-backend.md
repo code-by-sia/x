@@ -27,6 +27,7 @@ The native backend is being built in stages behind the flag, with the C backend 
 - calls to other integer functions (including recursion and mutual recursion);
 - calls to declared `extern "C"` functions with integer or string-literal arguments (bound from libSystem or the runtime by dyld — see below);
 - string literals, string locals, and string concatenation with `+` (a String value is a pointer plus a length, two registers / two stack slots; concatenation calls the runtime);
+- string operations: by-value equality `==` / `!=` (compares bytes, not pointers), `string_len`, `string_char_at`, and `string_slice`, each dispatched to a runtime symbol;
 - `Integer[]` arrays: literals, `.len`, and `.data[i]` indexing (a fat pointer `{ data, len, cap }` in three slots; a literal allocates its backing store through the runtime);
 - compound types (`type T = { ... }`) with Integer, String, and array fields: construction `T { f: v, ... }` and field access `t.f` (laid out inline, one region per field);
 - interfaces and classes: `Module.resolve(I)` returns an instance of the bound class, method calls dispatch to it, and methods read and write `this.field` on the heap-allocated (zero-initialized) state;

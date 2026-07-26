@@ -479,8 +479,18 @@ mapper parseOneArg(ps: PS) -> ArgResult {
     return ArgResult { ps: e, slots: sl, isFloat: fl }
 }
 
+// Built-in string functions become their linkable runtime symbols (the C
+// backend inlines the runtime.h helpers; the native backend calls real symbols).
+mapper mapBuiltin(name: String) -> String {
+    if name == "string_len" { return "xstd_strlen" }
+    if name == "string_char_at" { return "xstd_str_char_at" }
+    if name == "string_slice" { return "xstd_str_slice" }
+    return name
+}
+
 // call := IDENT '(' (arg (',' arg)*)? ')'   — ps is positioned at '('
-mapper parseCall(ps: PS, name: String) -> PS {
+mapper parseCall(ps: PS, rawName: String) -> PS {
+    let name = mapBuiltin(rawName)
     let cur = psAdvance(ps)                       // consume '('
     let argSlots: Integer[] = []
     let argFloats: Integer[] = []
@@ -712,12 +722,28 @@ mapper parseExpr(ps: PS) -> PS {
     let op = cmpOpOf(psKind(cur))
     if string_len(op) > 0 {
         let leftNum = cur.resultKind == numKind()
+        let leftStr = cur.resultKind == 1
         let left = cur.resultTemp
         let rhs = parseAdd(psAdvance(cur))
         if not rhs.ok { return rhs }
         if leftNum or rhs.resultKind == numKind() {
             if not (leftNum and rhs.resultKind == numKind()) { return psFail(rhs) }   // no Integer/Number mixing
             return psEmitFCmp(rhs, op, left, rhs.resultTemp)
+        }
+        if leftStr or rhs.resultKind == 1 {                                           // String == / !=
+            if not (leftStr and rhs.resultKind == 1) { return psFail(rhs) }
+            if op != "eq" and op != "ne" { return psFail(rhs) }                       // only equality on Strings
+            let eargs: Integer[] = []
+            eargs = appendInt(eargs, left)
+            eargs = appendInt(eargs, left + 1)
+            eargs = appendInt(eargs, rhs.resultTemp)
+            eargs = appendInt(eargs, rhs.resultTemp + 1)
+            let ec = psEmitCall(rhs, "xstd_str_eq", eargs, rhs.nextSlot, false)
+            if op == "ne" {
+                let c1 = psEmitConst(ec, 1)
+                return psEmitBin(c1, "sub", c1.resultTemp, ec.resultTemp)             // 1 - eq
+            }
+            return ec
         }
         return psEmitCmp(rhs, op, left, rhs.resultTemp)
     }
@@ -1209,6 +1235,10 @@ producer registerSigs(prog: Program) {
     fnsig_add("xstd_alloc", 0)
     fnsig_add("xstd_singleton_get", 0)
     fnsig_add("xstd_singleton_set", 0)
+    fnsig_add("xstd_strlen", 0)
+    fnsig_add("xstd_str_char_at", 0)
+    fnsig_add("xstd_str_slice", 1)
+    fnsig_add("xstd_str_eq", 0)
     for f in prog.functions { fnsig_add(f.name, retKindOfCtype(f.retCtype)) }
     for x in prog.externs { fnsig_add(x.name, retKindOfCtype(x.retCtype)) }
     for c in prog.classes {
@@ -1259,6 +1289,10 @@ producer compileNative(diag: Diagnostics, host: Host, enc: InsnEncoder, obj: Obj
     externNames = appendString(externNames, "xstd_alloc")    // runtime array/object alloc
     externNames = appendString(externNames, "xstd_singleton_get")
     externNames = appendString(externNames, "xstd_singleton_set")
+    externNames = appendString(externNames, "xstd_strlen")   // string operations
+    externNames = appendString(externNames, "xstd_str_char_at")
+    externNames = appendString(externNames, "xstd_str_slice")
+    externNames = appendString(externNames, "xstd_str_eq")
     for x in prog.externs { externNames = appendString(externNames, x.name) }
     let lk = linkModule(EncodedModule { funcs: efs, entry: m.entry }, externNames)
     if not lk.ok {

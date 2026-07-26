@@ -1030,6 +1030,11 @@ void         xstd_put_int(xc_integer_t n) { printf("%lld\n", (long long)n); }
 void         xstd_put_num(xc_number_t x) { printf("%g\n", (double)x); }
 void         xstd_put_str(xc_string_t s) { fwrite(s.data, 1, s.len, stdout); }
 xc_string_t  xstd_concat(xc_string_t a, xc_string_t b) { return xc_string_concat(a, b); }
+/* String operations as linkable symbols for the native backend (the runtime.h
+ * helpers are static inline, so they carry no symbol to bind against). */
+xc_integer_t xstd_str_eq(xc_string_t a, xc_string_t b) { return xc_string_eq(a, b) ? 1 : 0; }
+xc_integer_t xstd_str_char_at(xc_string_t s, xc_integer_t i) { return string_char_at(s, i); }
+xc_string_t  xstd_str_slice(xc_string_t s, xc_integer_t a, xc_integer_t b) { return string_slice(s, a, b); }
 xc_integer_t xstd_alloc(xc_integer_t n) { return (xc_integer_t)(intptr_t)calloc(1, (size_t)n); }
 /* Native-backend singleton cache: instance pointers by index (0 = not built). */
 static void* xw_singletons[8192];

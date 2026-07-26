@@ -192,6 +192,12 @@ XC_OUT="$W" "$XC" --backend native "$W/fe.xi" >/dev/null 2>&1
 feout=$("$W/fe" 2>/dev/null)
 if [ "$feout" = "15" ]; then echo "  ✓ for-in: sum [4,5,6] = 15"; else echo "  ✗ for-in printed \"$feout\""; fail=1; fi
 
+# String operations: by-value equality, length, and slicing via the runtime.
+printf 'extern "C" { producer xstd_put_int(n: Integer)  producer xstd_put_str(s: String) }\nmodule M { entry main(args: String[]) -> Integer { let a = "hello"  let b = "hel" + "lo"  if a == b { xstd_put_int(1) }  xstd_put_int(string_len(a))  xstd_put_str(string_slice(a, 1, 4))  return 0 } }\n' > "$W/so.xi"
+XC_OUT="$W" "$XC" --backend native "$W/so.xi" >/dev/null 2>&1
+soout=$("$W/so" 2>/dev/null | tr '\n' ' ')
+if [ "$soout" = "1 5 ell" ]; then echo "  ✓ string ops: ==, len 5, slice ell"; else echo "  ✗ string ops printed \"$soout\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1
