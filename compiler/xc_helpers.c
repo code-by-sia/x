@@ -510,7 +510,6 @@ static int fnsig_kind(xc_string_t name) {
     }
     return 0;
 }
-xc_integer_t fnsig_ret_str(xc_string_t name) { return fnsig_kind(name) == 1 ? 1 : 0; }
 xc_integer_t fnsig_ret_kind(xc_string_t name) { return fnsig_kind(name); }
 
 /* Compound-type registry for the native backend: each type's fields, their kind
