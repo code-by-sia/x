@@ -156,6 +156,25 @@ mapper emitInsn(ws: Integer[], ins: XInsn, locals: Integer) -> Integer[] {
         }
         return cur
     }
+    if ins.op == "astoren" {                                  // store a w-slot value at a variable index
+        let ew = ins.tlabel
+        let w1 = appendInt(ws, aLdrSp(9, ins.a.id * 8))       // data pointer
+        let w2 = appendInt(w1, aLdrSp(10, ins.b.id * 8))      // index
+        let w3 = w2
+        if ew != 1 {
+            let wm = appendInt(w2, aMovz(11, ew, 0))
+            w3 = appendInt(wm, aMul(10, 10, 11))
+        }
+        let w4 = appendInt(w3, aAddShift(9, 9, 10, 3))        // data + index*width*8
+        let cur = w4
+        let j = 0
+        while j < ew {                                        // write each slot of the value
+            let wl = appendInt(cur, aLdrSp(11, (ins.dst + j) * 8))
+            cur = appendInt(wl, aStr(11, 9, j * 8))
+            j = j + 1
+        }
+        return cur
+    }
     if ins.op == "aloadc" {
         let w1 = appendInt(ws, aLdrSp(9, ins.a.id * 8))       // object pointer
         let w2 = appendInt(w1, aLdr(11, 9, ins.tlabel * 8))   // load field at constant offset

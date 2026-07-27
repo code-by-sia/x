@@ -1013,12 +1013,27 @@ mapper parseStmt(ps: PS) -> PS {
     return psFail(ps)
 }
 
-// this.field = v (store into a class object), or c.method(...) as a statement.
+// this.field = v (store into a class object), c.method(...) as a statement, or
+// an array element store xs.data[i] = v.
 mapper parseDotStmt(ps: PS) -> PS {
     let name = psText(ps)
     let slot = lookupLocal(ps, name)
     if slot < 0 { return psFail(ps) }
     let kind = lookupKind(ps, name)
+    if isArr(kind) {                                   // xs.data[i] = v
+        let pd = psAdvance(psAdvance(ps))              // past IDENT and '.'
+        if psText(pd) != "data" { return psFail(pd) }
+        let pBr = psAdvance(pd)
+        if psKind(pBr) != 104 { return psFail(pBr) }   // '['
+        let idx = parseExpr(psAdvance(pBr))
+        if not idx.ok { return idx }
+        if psKind(idx) != 105 { return psFail(idx) }   // ']'
+        let pEq = psAdvance(idx)
+        if psKind(pEq) != 111 { return psFail(pEq) }   // '='
+        let v = parseExpr(psAdvance(pEq))
+        if not v.ok { return v }
+        return psEmit(v, xi_astoren(slot, idx.resultTemp, v.resultTemp, slotWidth(arrElemKind(kind))))
+    }
     if kind < 3 { return psFail(ps) }                  // must be a class value
     let ti = kind - 3
     let pField = psAdvance(psAdvance(ps))              // past IDENT and '.'

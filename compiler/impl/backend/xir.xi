@@ -164,6 +164,12 @@ mapper xi_straddr(dst: Integer, strid: Integer) -> XInsn =>
 mapper xi_astorec(ptrSlot: Integer, idx: Integer, valSlot: Integer) -> XInsn =>
     XInsn { op: "astorec", typ: "void", dst: 0 - 1, a: xtemp(ptrSlot), b: xtemp(valSlot), args: [], callee: "", tlabel: idx, flabel: 0 }
 
+// Store a `w`-slot value into element `idx` (variable): mem[data + idx*w*8] = val.
+// The counterpart of aloadn — used by `xs.data[i] = v`. `dst` carries the value
+// slot, `flabel` the value's slot count (the element width in slots).
+mapper xi_astoren(ptrSlot: Integer, idxSlot: Integer, valSlot: Integer, w: Integer) -> XInsn =>
+    XInsn { op: "astoren", typ: "void", dst: valSlot, a: xtemp(ptrSlot), b: xtemp(idxSlot), args: [], callee: "", tlabel: w, flabel: 0 }
+
 // mem[dst] = ((i64*)mem[a])[mem[b]]  — load an element at a variable index.
 mapper xi_aload(dst: Integer, ptrSlot: Integer, idxSlot: Integer) -> XInsn =>
     XInsn { op: "aload", typ: "i64", dst: dst, a: xtemp(ptrSlot), b: xtemp(idxSlot), args: [], callee: "", tlabel: 0, flabel: 0 }

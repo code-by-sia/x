@@ -218,6 +218,13 @@ XC_OUT="$W" "$XC" --backend native "$W/ma.xi" >/dev/null 2>&1
 maout=$("$W/ma" 2>/dev/null | tr '\n' ' ')
 if [ "$maout" = "6 10 " ]; then echo "  ✓ multi-slot arrays: String[] lens 6, compound[] sum 10"; else echo "  ✗ multi-slot arrays printed \"$maout\""; fail=1; fi
 
+# Array element store xs.data[i] = v (native idiom; verified by the sum). Covers
+# an Integer[] and a two-slot String[] element.
+printf 'extern "C" { producer xstd_put_int(n: Integer) }\nmodule M { entry main(args: String[]) -> Integer { let a = [10, 20, 30, 40]  a.data[1] = 99  a.data[3] = 5  let s = 0  for x in a { s = s + x }  xstd_put_int(s)  let ws = ["aa", "bb", "cc"]  ws.data[1] = "xyz"  let t = 0  for w in ws { t = t + string_len(w) }  xstd_put_int(t)  return 0 } }\n' > "$W/st.xi"
+XC_OUT="$W" "$XC" --backend native "$W/st.xi" >/dev/null 2>&1
+stout=$("$W/st" 2>/dev/null | tr '\n' ' ')
+if [ "$stout" = "144 7 " ]; then echo "  ✓ element store: Integer[]->144, String[]->7"; else echo "  ✗ element store printed \"$stout\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1
