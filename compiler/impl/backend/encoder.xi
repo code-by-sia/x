@@ -36,6 +36,7 @@ mapper aFsub(rd: Integer, rn: Integer, rm: Integer) -> Integer => 509622272 + rm
 mapper aFmul(rd: Integer, rn: Integer, rm: Integer) -> Integer => 509609984 + rm * 65536 + rn * 32 + rd
 mapper aFdiv(rd: Integer, rn: Integer, rm: Integer) -> Integer => 509614080 + rm * 65536 + rn * 32 + rd
 mapper aFcmp(rn: Integer, rm: Integer) -> Integer => 509616128 + rm * 65536 + rn * 32
+mapper aScvtf(rd: Integer, rn: Integer)  -> Integer => 2657222656 + rn * 32 + rd    // scvtf dRd, xRn (int -> double)
 mapper aAdd(rd: Integer, rn: Integer, rm: Integer) -> Integer => 2332033024 + rm * 65536 + rn * 32 + rd
 mapper aSub(rd: Integer, rn: Integer, rm: Integer) -> Integer => 3405774848 + rm * 65536 + rn * 32 + rd
 mapper aMul(rd: Integer, rn: Integer, rm: Integer) -> Integer => 2600468480 + rm * 65536 + 31 * 1024 + rn * 32 + rd
@@ -120,6 +121,11 @@ mapper emitInsn(ws: Integer[], ins: XInsn, locals: Integer, x8slot: Integer) -> 
         if ins.op == "fmul" { w3 = appendInt(w2, aFmul(0, 0, 1)) }
         if ins.op == "fdiv" { w3 = appendInt(w2, aFdiv(0, 0, 1)) }
         return appendInt(w3, aStrD(0, ins.dst * 8))
+    }
+    if ins.op == "i2f" {                                  // Integer -> Number
+        let w1 = appendInt(ws, aLdrSp(9, ins.a.id * 8))
+        let w2 = appendInt(w1, aScvtf(0, 9))
+        return appendInt(w2, aStrD(0, ins.dst * 8))
     }
     if ins.op == "copy" {
         let w1 = appendInt(ws, aLdrSp(9, ins.a.id * 8))

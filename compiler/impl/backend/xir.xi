@@ -109,6 +109,10 @@ mapper xi_bin(op: String, dst: Integer, a: XVal, b: XVal) -> XInsn =>
 mapper xi_fbin(op: String, dst: Integer, a: Integer, b: Integer) -> XInsn =>
     XInsn { op: op, typ: "f64", dst: dst, a: xtemp(a), b: xtemp(b), args: [], callee: "", tlabel: 0, flabel: 0 }
 
+// Integer -> Number conversion (scvtf); the implicit promotion in mixed math.
+mapper xi_i2f(dst: Integer, src: Integer) -> XInsn =>
+    XInsn { op: "i2f", typ: "f64", dst: dst, a: xtemp(src), b: xnone(), args: [], callee: "", tlabel: 0, flabel: 0 }
+
 // Materialize a Number constant into dst from the four 16-bit chunks of its
 // IEEE-754 double bit pattern (low to high), carried in a.imm/b.imm/tlabel/flabel.
 mapper xi_fconst(dst: Integer, c0: Integer, c1: Integer, c2: Integer, c3: Integer) -> XInsn =>

@@ -232,6 +232,12 @@ XC_OUT="$W" "$XC" --backend native "$W/x8.xi" >/dev/null 2>&1
 x8out=$("$W/x8" 2>/dev/null | tr '\n' ' ')
 if [ "$x8out" = "42 33 " ]; then echo "  ✓ array return/x8: native pair->42, grown [1,2,10,20]->33"; else echo "  ✗ array return printed \"$x8out\""; fail=1; fi
 
+# Implicit Integer -> Number promotion in mixed arithmetic and comparisons (scvtf).
+printf 'extern "C" { producer xstd_put_num(n: Number)  producer xstd_put_int(n: Integer) }\nmodule M { entry main(args: String[]) -> Integer { xstd_put_num(2.0 + 3)  xstd_put_num(7 / 2.0)  if 3 < 4.5 { xstd_put_int(1) } else { xstd_put_int(0) }  return 0 } }\n' > "$W/mx.xi"
+XC_OUT="$W" "$XC" --backend native "$W/mx.xi" >/dev/null 2>&1
+mxout=$("$W/mx" 2>/dev/null | tr '\n' ' ')
+if [ "$mxout" = "5 3.5 1 " ]; then echo "  ✓ mixed math: 2.0+3=5, 7/2.0=3.5, 3<4.5"; else echo "  ✗ mixed math printed \"$mxout\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1

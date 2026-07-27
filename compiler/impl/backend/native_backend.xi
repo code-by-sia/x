@@ -104,6 +104,10 @@ mapper psEmitFBin(ps: PS, op: String, a: Integer, b: Integer) -> PS {
     let t = ps.nextSlot
     return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_fbin(op, t, a, b)), nextSlot: t + 1, resultTemp: t, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultKind: numKind() }
 }
+mapper psEmitI2F(ps: PS, src: Integer) -> PS {
+    let t = ps.nextSlot
+    return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_i2f(t, src)), nextSlot: t + 1, resultTemp: t, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultKind: numKind() }
+}
 mapper psEmitBin(ps: PS, op: String, a: Integer, b: Integer) -> PS {
     let t = ps.nextSlot
     return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_bin(op, t, xtemp(a), xtemp(b))), nextSlot: t + 1, resultTemp: t, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultKind: 0 }
@@ -758,6 +762,15 @@ mapper parsePostfix(ps: PS) -> PS {
     return cur
 }
 
+// Promote a slot to Number (Integer -> double via scvtf); a Number is unchanged.
+// Used for the implicit Integer -> Number coercion in mixed expressions.
+type NumRes = { ps: PS, slot: Integer }
+mapper toNum(ps: PS, slot: Integer, kind: Integer) -> NumRes {
+    if kind == numKind() { return NumRes { ps: ps, slot: slot } }
+    let p = psEmitI2F(ps, slot)
+    return NumRes { ps: p, slot: p.resultTemp }
+}
+
 // mul := primary (('*' | '/' | '%') primary)*
 mapper parseMul(ps: PS) -> PS {
     let cur = parsePrimary(ps)
@@ -768,16 +781,17 @@ mapper parseMul(ps: PS) -> PS {
         let op = "mul"
         if isDiv { op = "sdiv" }
         if isMod { op = "smod" }
-        let leftNum = cur.resultKind == numKind()
+        let leftKind = cur.resultKind
         let left = cur.resultTemp
         let rhs = parsePrimary(psAdvance(cur))
         if not rhs.ok { return rhs }
-        if leftNum or rhs.resultKind == numKind() {
-            if not (leftNum and rhs.resultKind == numKind()) { return psFail(rhs) }   // no Integer/Number mixing
+        if leftKind == numKind() or rhs.resultKind == numKind() {
             if isMod { return psFail(rhs) }                                           // no float remainder
             let fop = "fmul"
             if isDiv { fop = "fdiv" }
-            cur = psEmitFBin(rhs, fop, left, rhs.resultTemp)
+            let ln = toNum(rhs, left, leftKind)                                       // coerce both to Number
+            let rn = toNum(ln.ps, rhs.resultTemp, rhs.resultKind)
+            cur = psEmitFBin(rn.ps, fop, ln.slot, rn.slot)
         } else {
             cur = psEmitBin(rhs, op, left, rhs.resultTemp)
         }
@@ -792,18 +806,19 @@ mapper parseAdd(ps: PS) -> PS {
     while (psKind(cur) == 118) or (psKind(cur) == 119) {
         let isAdd = psKind(cur) == 118
         let leftStr = cur.resultKind == 1
-        let leftNum = cur.resultKind == numKind()
+        let leftKind = cur.resultKind
         let left = cur.resultTemp
         let rhs = parseMul(psAdvance(cur))
         if not rhs.ok { return rhs }
         if isAdd and leftStr and rhs.resultKind == 1 {
             cur = psEmitConcat(rhs, left, rhs.resultTemp)   // String + String
         } else {
-            if leftNum or rhs.resultKind == numKind() {
-                if not (leftNum and rhs.resultKind == numKind()) { return psFail(rhs) }   // no Integer/Number mixing
+            if leftKind == numKind() or rhs.resultKind == numKind() {
                 let fop = "fadd"
                 if not isAdd { fop = "fsub" }
-                cur = psEmitFBin(rhs, fop, left, rhs.resultTemp)
+                let ln = toNum(rhs, left, leftKind)                                       // coerce both to Number
+                let rn = toNum(ln.ps, rhs.resultTemp, rhs.resultKind)
+                cur = psEmitFBin(rn.ps, fop, ln.slot, rn.slot)
             } else {
                 let op = "add"
                 if not isAdd { op = "sub" }
@@ -820,14 +835,15 @@ mapper parseExpr(ps: PS) -> PS {
     if not cur.ok { return cur }
     let op = cmpOpOf(psKind(cur))
     if string_len(op) > 0 {
-        let leftNum = cur.resultKind == numKind()
+        let leftKind = cur.resultKind
         let leftStr = cur.resultKind == 1
         let left = cur.resultTemp
         let rhs = parseAdd(psAdvance(cur))
         if not rhs.ok { return rhs }
-        if leftNum or rhs.resultKind == numKind() {
-            if not (leftNum and rhs.resultKind == numKind()) { return psFail(rhs) }   // no Integer/Number mixing
-            return psEmitFCmp(rhs, op, left, rhs.resultTemp)
+        if leftKind == numKind() or rhs.resultKind == numKind() {
+            let ln = toNum(rhs, left, leftKind)                                        // coerce both to Number
+            let rn = toNum(ln.ps, rhs.resultTemp, rhs.resultKind)
+            return psEmitFCmp(rn.ps, op, ln.slot, rn.slot)
         }
         if leftStr or rhs.resultKind == 1 {                                           // String == / !=
             if not (leftStr and rhs.resultKind == 1) { return psFail(rhs) }
