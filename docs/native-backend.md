@@ -22,7 +22,7 @@ The runtime is not rewritten for this. A prebuilt runtime object ships per platf
 
 The native backend is being built in stages behind the flag, with the C backend as the untouched default the whole way. Today it compiles `Integer`- and `String`-typed functions: `main` plus any top-level function whose parameters and return are `Integer` or `String`. A body may use:
 
-- `let` bindings, assignment, and `return`;
+- `let` bindings (with or without a `: Type` annotation, which types an empty array and promotes an `Integer` initializer to a `Number`), assignment, and `return`;
 - `if` / `else` and `while`;
 - calls to other integer functions (including recursion and mutual recursion);
 - calls to declared `extern "C"` functions with integer or string-literal arguments (bound from libSystem or the runtime by dyld — see below);

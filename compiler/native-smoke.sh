@@ -238,6 +238,13 @@ XC_OUT="$W" "$XC" --backend native "$W/mx.xi" >/dev/null 2>&1
 mxout=$("$W/mx" 2>/dev/null | tr '\n' ' ')
 if [ "$mxout" = "5 3.5 1 " ]; then echo "  ✓ mixed math: 2.0+3=5, 7/2.0=3.5, 3<4.5"; else echo "  ✗ mixed math printed \"$mxout\""; fail=1; fi
 
+# Type-annotated let: `let x: T = ...` (skips the annotation, coerces Integer to
+# Number, and types an empty array).
+printf 'extern "C" { producer xstd_put_int(n: Integer)  producer xstd_put_num(n: Number) }\nmodule M { entry main(args: String[]) -> Integer { let a: Integer = 5  let n: Number = 3  xstd_put_int(a)  xstd_put_num(n + 0.5)  let xs: Integer[] = [10, 20, 30]  let s = 0  for x in xs { s = s + x }  xstd_put_int(s)  return 0 } }\n' > "$W/tl.xi"
+XC_OUT="$W" "$XC" --backend native "$W/tl.xi" >/dev/null 2>&1
+tlout=$("$W/tl" 2>/dev/null | tr '\n' ' ')
+if [ "$tlout" = "5 3.5 60 " ]; then echo "  ✓ typed let: a=5, n:Number=3->3.5, xs sum 60"; else echo "  ✗ typed let printed \"$tlout\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1

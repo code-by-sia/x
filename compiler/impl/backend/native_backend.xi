@@ -877,18 +877,50 @@ mapper parseBlock(ps: PS) -> PS {
     return psAdvance(cur)
 }
 
+// Read a type annotation (Integer/Number/Bool/String, a user type, or any of
+// these with `[]`) into a native kind, plus the state positioned past it.
+type AnnRes = { kind: Integer, ps: PS }
+mapper parseTypeAnn(ps: PS) -> AnnRes {
+    let k = psKind(ps)
+    let base = 0
+    if k == 260 { base = numKind() }
+    if k == 263 { base = 1 }
+    if k == 1 { let ti = ctype_index(psText(ps))  if ti >= 0 { base = 3 + ti } }
+    let after = psAdvance(ps)
+    if psKind(after) == 104 and psKind(psAdvance(after)) == 105 {   // '[' ']'  -> an array
+        let a2 = psAdvance(psAdvance(after))
+        if base == 1 { return AnnRes { kind: strArrKind(), ps: a2 } }
+        if base >= 3 and base < numKind() { return AnnRes { kind: 1000 + (base - 3), ps: a2 } }
+        return AnnRes { kind: 2, ps: a2 }                          // Integer[] (and the fallback)
+    }
+    return AnnRes { kind: base, ps: after }
+}
+
 mapper parseLet(ps: PS) -> PS {
     let p1 = psAdvance(ps)                       // 'let'
     if psKind(p1) != 1 { return psFail(p1) }
     let name = psText(p1)
     let p2 = psAdvance(p1)
+    let declKind = 0 - 999                       // no annotation
+    if psKind(p2) == 108 {                        // ': Type'
+        let ann = parseTypeAnn(psAdvance(p2))
+        declKind = ann.kind
+        p2 = ann.ps
+    }
     if psKind(p2) != 111 { return psFail(p2) }   // '='
     let p3 = parseExpr(psAdvance(p2))
     if not p3.ok { return p3 }
     let vslot = p3.resultTemp
     let kind = p3.resultKind
-    let sx = p3.nextSlot
-    let cur = psEmit(declareLocal(p3, name, kind), xi_copy(sx, vslot))
+    let cur0 = p3
+    if declKind == numKind() and kind == 0 {     // Integer literal/value -> a Number local
+        cur0 = psEmitI2F(p3, vslot)
+        vslot = cur0.resultTemp
+        kind = numKind()
+    }
+    if isArr(declKind) and kind == 2 { kind = declKind }   // an empty [] takes the declared element type
+    let sx = cur0.nextSlot
+    let cur = psEmit(declareLocal(cur0, name, kind), xi_copy(sx, vslot))
     let j = 1
     while j < slotWidth(kind) { cur = psEmit(cur, xi_copy(sx + j, vslot + j))  j = j + 1 }   // extra slots
     return cur
