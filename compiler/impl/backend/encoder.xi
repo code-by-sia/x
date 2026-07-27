@@ -96,7 +96,7 @@ mapper matConst(ws: Integer[], reg: Integer, val: Integer) -> Integer[] {
 
 // Emit one straight-line (non-branch, non-label, non-call) instruction. `locals`
 // is the byte size of the local frame below the saved fp/lr.
-mapper emitInsn(ws: Integer[], ins: XInsn, locals: Integer) -> Integer[] {
+mapper emitInsn(ws: Integer[], ins: XInsn, locals: Integer, x8slot: Integer) -> Integer[] {
     if ins.op == "const" {
         let w1 = matConst(ws, 9, ins.a.imm)
         return appendInt(w1, aStrSp(9, ins.dst * 8))
@@ -181,11 +181,23 @@ mapper emitInsn(ws: Integer[], ins: XInsn, locals: Integer) -> Integer[] {
         return appendInt(w2, aStrSp(11, ins.dst * 8))
     }
     if ins.op == "ret" {
-        let w1 = ws
-        if ins.typ == "f64" { w1 = appendInt(ws, aLdrD(0, ins.a.id * 8)) }            // Number: d0
-        else { w1 = appendInt(ws, aLdrSp(0, ins.a.id * 8)) }
-        let w1b = w1
-        if ins.typ == "str" { w1b = appendInt(w1, aLdrSp(1, (ins.a.id + 1) * 8)) }   // String: also x1
+        let w1b = ws
+        if ins.typ == "arr" {                                                        // array: write 3 slots into *x8
+            let ra = appendInt(ws, aLdrSp(8, x8slot * 8))                            // reload result pointer
+            let rj = 0
+            while rj < 3 {
+                let rl = appendInt(ra, aLdrSp(11, (ins.a.id + rj) * 8))
+                ra = appendInt(rl, aStr(11, 8, rj * 8))
+                rj = rj + 1
+            }
+            w1b = ra
+        } else {
+            let w1 = ws
+            if ins.typ == "f64" { w1 = appendInt(ws, aLdrD(0, ins.a.id * 8)) }        // Number: d0
+            else { w1 = appendInt(ws, aLdrSp(0, ins.a.id * 8)) }
+            w1b = w1
+            if ins.typ == "str" { w1b = appendInt(w1, aLdrSp(1, (ins.a.id + 1) * 8)) } // String: also x1
+        }
         let w2 = w1b
         if locals > 0 { w2 = appendInt(w1b, aAddSp(locals)) }
         let w3 = appendInt(w2, 2831252477)                // ldp x29,x30,[sp],#16
@@ -223,7 +235,11 @@ mapper emitInsn(ws: Integer[], ins: XInsn, locals: Integer) -> Integer[] {
 // with internal branches resolved, epilogue folded into each `ret`. Calls are
 // emitted as BL placeholders and returned as (site, symbol) for the linker.
 mapper encodeArm64(f: XFunc) -> EncResult {
-    let locals = alignUp(f.nTemps * 8, 16)
+    let arrRet = f.ret == "arr"                           // returns an array via x8 (AAPCS)
+    let x8slot = f.nTemps                                 // frame slot holding the saved result pointer
+    let nloc = f.nTemps
+    if arrRet { nloc = f.nTemps + 1 }
+    let locals = alignUp(nloc * 8, 16)
 
     let maxLabel = 0 - 1
     for blk in f.blocks {
@@ -238,20 +254,31 @@ mapper encodeArm64(f: XFunc) -> EncResult {
     let ws: Integer[] = []
     ws = appendInt(ws, 2847898621)                        // stp x29,x30,[sp,#-16]!
     if locals > 0 { ws = appendInt(ws, aSubSp(locals)) }
+    if arrRet { ws = appendInt(ws, aStrSp(8, x8slot * 8)) }                // save the result-buffer pointer
     let np = stringArrLen(f.params)                                        // spill params to slots
     let preg = 0                                                           // integer arg registers x0..
     let dreg = 0                                                           // float arg registers d0..
     let pslot = 0
     let pi = 0
     while pi < np {
-        let pw = intArrGet(f.paramKinds, pi)                               // slot width, or -1 for a Number (d-register)
-        if pw < 0 {
+        let pw = intArrGet(f.paramKinds, pi)                               // slot width, -1 Number (d-reg), -2 array pointer
+        if pw == 0 - 1 {
             ws = appendInt(ws, aStrD(dreg, pslot * 8))
             dreg = dreg + 1  pslot = pslot + 1
         } else {
-            let pj = 0
-            while pj < pw { ws = appendInt(ws, aStrSp(preg + pj, (pslot + pj) * 8))  pj = pj + 1 }
-            preg = preg + pw  pslot = pslot + pw
+            if pw == 0 - 2 {                                              // array param: a pointer, copy its 3 words in
+                ws = appendInt(ws, aLdr(11, preg, 0))
+                ws = appendInt(ws, aStrSp(11, pslot * 8))
+                ws = appendInt(ws, aLdr(11, preg, 8))
+                ws = appendInt(ws, aStrSp(11, (pslot + 1) * 8))
+                ws = appendInt(ws, aLdr(11, preg, 16))
+                ws = appendInt(ws, aStrSp(11, (pslot + 2) * 8))
+                preg = preg + 1  pslot = pslot + 3
+            } else {
+                let pj = 0
+                while pj < pw { ws = appendInt(ws, aStrSp(preg + pj, (pslot + pj) * 8))  pj = pj + 1 }
+                preg = preg + pw  pslot = pslot + pw
+            }
         }
         pi = pi + 1
     }
@@ -300,18 +327,23 @@ mapper encodeArm64(f: XFunc) -> EncResult {
                                     ws = appendInt(ws, aLdrD(dr, a.id * 8))
                                     dr = dr + 1
                                 } else {
-                                    ws = appendInt(ws, aLdrSp(xr, a.id * 8))
+                                    if a.kind == "aptr" {                          // array by pointer (AAPCS)
+                                        ws = appendInt(ws, aAddImm(xr, 31, a.id * 8))
+                                    } else {
+                                        ws = appendInt(ws, aLdrSp(xr, a.id * 8))
+                                    }
                                     xr = xr + 1
                                 }
                             }
+                            if ins.typ == "arr" { ws = appendInt(ws, aAddImm(8, 31, ins.dst * 8)) }     // x8 = result buffer
                             cSites = appendInt(cSites, intArrLen(ws))
                             cSyms = appendString(cSyms, ins.callee)
                             ws = appendInt(ws, 0)                       // bl placeholder
                             if ins.typ == "f64" { ws = appendInt(ws, aStrD(0, ins.dst * 8)) }          // Number result: d0
-                            else { ws = appendInt(ws, aStrSp(0, ins.dst * 8)) }                        // store x0
+                            else { if ins.typ != "arr" { ws = appendInt(ws, aStrSp(0, ins.dst * 8)) } }// array result already in *x8
                             if ins.typ == "str" { ws = appendInt(ws, aStrSp(1, (ins.dst + 1) * 8)) }   // string: also x1 (len)
                         } else {
-                            ws = emitInsn(ws, ins, locals)
+                            ws = emitInsn(ws, ins, locals, x8slot)
                         }
                     }
                 }

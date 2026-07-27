@@ -1034,6 +1034,17 @@ xc_string_t  xstd_concat(xc_string_t a, xc_string_t b) { return xc_string_concat
  * helpers are static inline, so they carry no symbol to bind against). */
 xc_integer_t xstd_str_eq(xc_string_t a, xc_string_t b) { return xc_string_eq(a, b) ? 1 : 0; }
 xc_integer_t xstd_str_char_at(xc_string_t s, xc_integer_t i) { return string_char_at(s, i); }
+/* Grow an Integer[] by one, returning the (possibly reallocated) array. Exercises
+ * the AAPCS by-value struct argument and x8 indirect result from the native backend. */
+xc_arr_integer_t xstd_iappend(xc_arr_integer_t a, xc_integer_t v) {
+    if (a.len < a.cap) { a.data[a.len] = v; a.len += 1; return a; }
+    xc_size_t nc = a.cap ? a.cap * 2 : 4;
+    xc_integer_t* nd = (xc_integer_t*)malloc(nc * sizeof(xc_integer_t));
+    if (a.len) memcpy(nd, a.data, a.len * sizeof(xc_integer_t));
+    nd[a.len] = v;
+    xc_arr_integer_t out; out.data = nd; out.len = a.len + 1; out.cap = nc;
+    return out;
+}
 xc_string_t  xstd_str_slice(xc_string_t s, xc_integer_t a, xc_integer_t b) { return string_slice(s, a, b); }
 xc_integer_t xstd_alloc(xc_integer_t n) { return (xc_integer_t)(intptr_t)calloc(1, (size_t)n); }
 /* Native-backend singleton cache: instance pointers by index (0 = not built). */

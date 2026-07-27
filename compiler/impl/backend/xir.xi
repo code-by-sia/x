@@ -37,6 +37,7 @@ type XVal = {
 mapper ximm(n: Integer)   -> XVal => XVal { kind: "imm",  imm: n, id: 0,  sym: "" }
 mapper xtemp(id: Integer) -> XVal => XVal { kind: "temp", imm: 0, id: id, sym: "" }
 mapper xftemp(id: Integer) -> XVal => XVal { kind: "ftemp", imm: 0, id: id, sym: "" }   // a float slot (passed in a d-register)
+mapper xaptr(id: Integer)  -> XVal => XVal { kind: "aptr",  imm: 0, id: id, sym: "" }   // an array base slot (passed by pointer, AAPCS)
 mapper xarg(i: Integer)   -> XVal => XVal { kind: "arg",  imm: 0, id: i,  sym: "" }
 mapper xsym(s: String)    -> XVal => XVal { kind: "sym",  imm: 0, id: 0,  sym: s  }
 mapper xnone()            -> XVal => XVal { kind: "none", imm: 0, id: 0,  sym: "" }
@@ -126,6 +127,11 @@ mapper xi_ret2(a: XVal, isStr: Bool) -> XInsn {
 // A return whose value is a Number, loaded into d0 by the epilogue.
 mapper xi_retn(a: XVal) -> XInsn =>
     XInsn { op: "ret", typ: "f64", dst: 0 - 1, a: a, b: xnone(), args: [], callee: "", tlabel: 0, flabel: 0 }
+
+// A return whose value is an array (three slots), written into the caller's
+// buffer through x8 by the epilogue (AAPCS indirect result).
+mapper xi_reta(a: XVal) -> XInsn =>
+    XInsn { op: "ret", typ: "arr", dst: 0 - 1, a: a, b: xnone(), args: [], callee: "", tlabel: 0, flabel: 0 }
 
 mapper xi_call(dst: Integer, callee: String, args: XVal[], typ: String) -> XInsn =>
     XInsn { op: "call", typ: typ, dst: dst, a: xnone(), b: xnone(), args: args, callee: callee, tlabel: 0, flabel: 0 }

@@ -168,15 +168,18 @@ mapper cmpOpOf(k: Integer) -> String {
     return ""
 }
 
-// Build call-argument values; a slot flagged float becomes an `ftemp` so the
-// encoder loads it into a d-register (the AAPCS float bank).
-mapper slotsToValsF(slots: Integer[], floats: Integer[]) -> XVal[] {
+// Build call-argument values. `modes` is per slot: 1 = float (a d-register),
+// 2 = array pointer (AAPCS: the array's base slot is passed by address), else a
+// plain value in an integer register.
+mapper slotsToValsF(slots: Integer[], modes: Integer[]) -> XVal[] {
     let out: XVal[] = []
     let i = 0
     let n = intArrLen(slots)
     while i < n {
-        if intArrGet(floats, i) == 1 { out = appendXVal(out, xftemp(intArrGet(slots, i))) }
-        else { out = appendXVal(out, xtemp(intArrGet(slots, i))) }
+        let m = intArrGet(modes, i)
+        if m == 1 { out = appendXVal(out, xftemp(intArrGet(slots, i))) }
+        else { if m == 2 { out = appendXVal(out, xaptr(intArrGet(slots, i))) }
+        else { out = appendXVal(out, xtemp(intArrGet(slots, i))) } }
         i = i + 1
     }
     return out
@@ -187,26 +190,27 @@ mapper zeroFlags(n: Integer) -> Integer[] {
     while i < n { out = appendInt(out, 0)  i = i + 1 }
     return out
 }
-// Emit a call. `retKind` is 0 Integer/void, 1 String (x0:x1, two slots), 2 Number
-// (d0). `argFloats` marks which arg slots are doubles (routed to d-registers).
-mapper psEmitCallF(ps: PS, callee: String, argSlots: Integer[], argFloats: Integer[], dst: Integer, retKind: Integer) -> PS {
+// Emit a call. `retKind` is the callee's full native return kind: 1 String (x0:x1),
+// numKind Number (d0), an array kind (returned via x8 into 3 slots), else Integer.
+// `argModes` marks each arg slot's register bank (see slotsToValsF).
+mapper psEmitCallF(ps: PS, callee: String, argSlots: Integer[], argModes: Integer[], dst: Integer, retKind: Integer) -> PS {
     let typ = "i64"
     let ns = dst + 1
     let rk = 0
     if retKind == 1 { typ = "str"  ns = dst + 2  rk = 1 }
-    if retKind == 2 { typ = "f64"  rk = numKind() }
-    return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_call(dst, callee, slotsToValsF(argSlots, argFloats), typ)), nextSlot: ns, resultTemp: dst, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultKind: rk }
+    if retKind == numKind() { typ = "f64"  rk = numKind() }
+    if isArr(retKind) { typ = "arr"  ns = dst + 3  rk = retKind }
+    return PS { toks: ps.toks, pos: ps.pos, insns: appendXInsn(ps.insns, xi_call(dst, callee, slotsToValsF(argSlots, argModes), typ)), nextSlot: ns, resultTemp: dst, ok: ps.ok, names: ps.names, slots: ps.slots, nextLabel: ps.nextLabel, lastRet: ps.lastRet, kinds: ps.kinds, resultKind: rk }
 }
 mapper psEmitCall(ps: PS, callee: String, argSlots: Integer[], dst: Integer, retStr: Bool) -> PS {
     let rk = 0
     if retStr { rk = 1 }
     return psEmitCallF(ps, callee, argSlots, zeroFlags(intArrLen(argSlots)), dst, rk)
 }
-// A callee's return kind for a call site (0 Integer/void, 1 String, 2 Number).
+// A callee's full native return kind (0 Integer/void, 1 String, numKind Number,
+// or an array kind returned via x8).
 mapper callRetKind(name: String) -> Integer {
-    if fnsig_ret_num(name) == 1 { return 2 }
-    if fnsig_ret_str(name) == 1 { return 1 }
-    return 0
+    return fnsig_ret_kind(name)
 }
 
 mapper psEmitStrAddr(ps: PS, strid: Integer) -> PS {
@@ -495,19 +499,24 @@ mapper parseArrayLit(ps: PS) -> PS {
     return psEmitArrayLit(psAdvance(cur), elemSlots, elemKind)
 }
 
-// One call argument: its value slot(s), plus a parallel per-slot float flag (a
-// Number occupies one slot and is passed in a d-register).
+// One call argument: its value slot(s), plus a parallel per-slot mode flag
+// (0 value, 1 Number/d-register, 2 array passed by pointer per AAPCS).
 type ArgResult = { ps: PS, slots: Integer[], isFloat: Integer[] }
 mapper parseOneArg(ps: PS) -> ArgResult {
     let e = parseExpr(ps)
     let sl: Integer[] = []
     let fl: Integer[] = []
     if e.ok {
-        let w = slotWidth(e.resultKind)
-        let isf = 0
-        if e.resultKind == numKind() { isf = 1 }
-        let j = 0
-        while j < w { sl = appendInt(sl, e.resultTemp + j)  fl = appendInt(fl, isf)  j = j + 1 }
+        if isArr(e.resultKind) {                       // an array: one register, its base by address
+            sl = appendInt(sl, e.resultTemp)
+            fl = appendInt(fl, 2)
+        } else {
+            let w = slotWidth(e.resultKind)
+            let isf = 0
+            if e.resultKind == numKind() { isf = 1 }
+            let j = 0
+            while j < w { sl = appendInt(sl, e.resultTemp + j)  fl = appendInt(fl, isf)  j = j + 1 }
+        }
     }
     return ArgResult { ps: e, slots: sl, isFloat: fl }
 }
@@ -668,11 +677,16 @@ mapper parseExtCall(ps: PS, key: String, method: String, recvSlot: Integer, recv
     let cur = psAdvance(ps)                            // consume '('
     let argSlots: Integer[] = []
     let argFloats: Integer[] = []
-    let rw = slotWidth(recvKind)
-    let risf = 0
-    if recvKind == numKind() { risf = 1 }
-    let rj = 0
-    while rj < rw { argSlots = appendInt(argSlots, recvSlot + rj)  argFloats = appendInt(argFloats, risf)  rj = rj + 1 }
+    if isArr(recvKind) {                              // an array receiver rides a pointer (AAPCS)
+        argSlots = appendInt(argSlots, recvSlot)
+        argFloats = appendInt(argFloats, 2)
+    } else {
+        let rw = slotWidth(recvKind)
+        let risf = 0
+        if recvKind == numKind() { risf = 1 }
+        let rj = 0
+        while rj < rw { argSlots = appendInt(argSlots, recvSlot + rj)  argFloats = appendInt(argFloats, risf)  rj = rj + 1 }
+    }
     if psKind(cur) != 101 {
         let r = parseOneArg(cur)
         if not r.ps.ok { return r.ps }
@@ -884,6 +898,7 @@ mapper parseReturn(ps: PS) -> PS {
     if not p1.ok { return p1 }
     let rins = xi_ret2(xtemp(p1.resultTemp), p1.resultKind == 1)
     if p1.resultKind == numKind() { rins = xi_retn(xtemp(p1.resultTemp)) }   // Number -> d0
+    if isArr(p1.resultKind) { rins = xi_reta(xtemp(p1.resultTemp)) }         // array -> x8
     let p2 = psEmit(p1, rins)
     return PS { toks: p2.toks, pos: p2.pos, insns: p2.insns, nextSlot: p2.nextSlot, resultTemp: p2.resultTemp, ok: p2.ok, names: p2.names, slots: p2.slots, nextLabel: p2.nextLabel, lastRet: true, kinds: p2.kinds, resultKind: p2.resultKind }
 }
@@ -1131,7 +1146,10 @@ mapper dummyFn() -> XFunc {
 // others bind params to the first slots (a String param takes two) and spill
 // them in the prologue. Integer and String returns are both allowed.
 mapper lowerFunc(name: String, paramStr: String, retC: String, bodyTokens: Token[], isEntry: Bool) -> FuncLower {
-    if retC != "xc_integer_t" and retC != "xc_bool_t" and retC != "xc_string_t" and retC != "xc_number_t" { return FuncLower { ok: false, fn: dummyFn() } }
+    let arrRet = retC.startsWith2("xc_arr_")
+    if retC != "xc_integer_t" and retC != "xc_bool_t" and retC != "xc_string_t" and retC != "xc_number_t" and not arrRet { return FuncLower { ok: false, fn: dummyFn() } }
+    let retSig = "i64"
+    if arrRet { retSig = "arr" }
     let names0: String[] = []
     let slots0: Integer[] = []
     let kinds0: Integer[] = []
@@ -1154,10 +1172,16 @@ mapper lowerFunc(name: String, paramStr: String, retC: String, bodyTokens: Token
                 nslots = nslots + 1
                 ndreg = ndreg + 1
             } else {
-                let w = slotWidth(kind)                 // paramKinds carries the slot width (x-registers to spill)
-                pkinds = appendInt(pkinds, w)
-                nslots = nslots + w
-                nxreg = nxreg + w
+                if isArr(kind) {                        // an array param: a pointer in one register (paramKinds -2)
+                    pkinds = appendInt(pkinds, 0 - 2)
+                    nslots = nslots + 3
+                    nxreg = nxreg + 1
+                } else {
+                    let w = slotWidth(kind)             // paramKinds carries the slot width (x-registers to spill)
+                    pkinds = appendInt(pkinds, w)
+                    nslots = nslots + w
+                    nxreg = nxreg + w
+                }
             }
             i = i + 1
         }
@@ -1169,7 +1193,7 @@ mapper lowerFunc(name: String, paramStr: String, retC: String, bodyTokens: Token
     if not ps.lastRet { return FuncLower { ok: false, fn: dummyFn() } }
     let blocks0: XBlock[] = []
     let blocks = appendXBlock(blocks0, XBlock { id: 0, insns: ps.insns })
-    return FuncLower { ok: true, fn: XFunc { name: name, params: names0, paramKinds: pkinds, ret: "i64", blocks: blocks, nTemps: ps.nextSlot, frame: 0 } }
+    return FuncLower { ok: true, fn: XFunc { name: name, params: names0, paramKinds: pkinds, ret: retSig, blocks: blocks, nTemps: ps.nextSlot, frame: 0 } }
 }
 
 // Lower a class method to <Class>_<method>. `this` (the object pointer) is the
@@ -1177,7 +1201,10 @@ mapper lowerFunc(name: String, paramStr: String, retC: String, bodyTokens: Token
 // return) gets a trailing return so the epilogue runs.
 mapper lowerMethod(className: String, ci: Integer, meth: MethodSpec) -> FuncLower {
     let retC = meth.retCtype
-    let isVoid = retC != "xc_integer_t" and retC != "xc_bool_t" and retC != "xc_string_t" and retC != "xc_number_t"
+    let arrRet = retC.startsWith2("xc_arr_")
+    let retSig = "i64"
+    if arrRet { retSig = "arr" }
+    let isVoid = retC != "xc_integer_t" and retC != "xc_bool_t" and retC != "xc_string_t" and retC != "xc_number_t" and not arrRet
     let pp = parseNativeParams(meth.params)
     if not pp.ok { return FuncLower { ok: false, fn: dummyFn() } }
     let names0: String[] = []
@@ -1203,10 +1230,16 @@ mapper lowerMethod(className: String, ci: Integer, meth: MethodSpec) -> FuncLowe
             nslots = nslots + 1
             ndreg = ndreg + 1
         } else {
-            let w = slotWidth(kd)
-            pkinds = appendInt(pkinds, w)
-            nslots = nslots + w
-            nxreg = nxreg + w
+            if isArr(kd) {                    // an array param: a pointer in one register
+                pkinds = appendInt(pkinds, 0 - 2)
+                nslots = nslots + 3
+                nxreg = nxreg + 1
+            } else {
+                let w = slotWidth(kd)
+                pkinds = appendInt(pkinds, w)
+                nslots = nslots + w
+                nxreg = nxreg + w
+            }
         }
         i = i + 1
     }
@@ -1220,7 +1253,7 @@ mapper lowerMethod(className: String, ci: Integer, meth: MethodSpec) -> FuncLowe
     }
     let blocks0: XBlock[] = []
     let blocks = appendXBlock(blocks0, XBlock { id: 0, insns: ps.insns })
-    return FuncLower { ok: true, fn: XFunc { name: className + "_" + meth.name, params: names0, paramKinds: pkinds, ret: "i64", blocks: blocks, nTemps: ps.nextSlot, frame: 0 } }
+    return FuncLower { ok: true, fn: XFunc { name: className + "_" + meth.name, params: names0, paramKinds: pkinds, ret: retSig, blocks: blocks, nTemps: ps.nextSlot, frame: 0 } }
 }
 
 // Add "name:ctype" fields to a registered type, mapping the C type to a kind.
@@ -1330,7 +1363,13 @@ producer registerTypes(prog: Program) {
 // A callee's return kind for the sig registry: 0 Integer/void, 1 String, 2 Number.
 mapper retKindOfCtype(retC: String) -> Integer {
     if retC == "xc_string_t" { return 1 }
-    if retC == "xc_number_t" { return 2 }
+    if retC == "xc_number_t" { return numKind() }
+    if retC == "xc_arr_integer_t" { return 2 }
+    if retC == "xc_arr_string_t" { return strArrKind() }
+    if retC.startsWith2("xc_arr_") {
+        let et = ctype_index(string_slice(retC, 7, string_len(retC) - 2))
+        if et >= 0 { return 1000 + et }
+    }
     return 0
 }
 

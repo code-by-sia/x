@@ -225,6 +225,13 @@ XC_OUT="$W" "$XC" --backend native "$W/st.xi" >/dev/null 2>&1
 stout=$("$W/st" 2>/dev/null | tr '\n' ' ')
 if [ "$stout" = "144 7 " ]; then echo "  ✓ element store: Integer[]->144, String[]->7"; else echo "  ✗ element store printed \"$stout\""; fail=1; fi
 
+# Array return (AAPCS x8) and by-pointer array args: a native array-returning
+# function, and a growable Integer[] via a C runtime call.
+printf 'mapper pair(a: Integer, b: Integer) -> Integer[] { return [a, b] }\nmapper sumA(xs: Integer[]) -> Integer { let s = 0  for x in xs { s = s + x }  return s }\nextern "C" { producer xstd_put_int(n: Integer)  mapper xstd_iappend(a: Integer[], v: Integer) -> Integer[] }\nmodule M { entry main(args: String[]) -> Integer { xstd_put_int(sumA(pair(7, 35)))  let g = [1, 2]  g = xstd_iappend(g, 10)  g = xstd_iappend(g, 20)  xstd_put_int(sumA(g))  return 0 } }\n' > "$W/x8.xi"
+XC_OUT="$W" "$XC" --backend native "$W/x8.xi" >/dev/null 2>&1
+x8out=$("$W/x8" 2>/dev/null | tr '\n' ' ')
+if [ "$x8out" = "42 33 " ]; then echo "  ✓ array return/x8: native pair->42, grown [1,2,10,20]->33"; else echo "  ✗ array return printed \"$x8out\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1

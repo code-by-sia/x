@@ -37,7 +37,7 @@ extern "C" {
     producer fnsig_reset()                                              // clear the return-kind registry
     producer fnsig_add(name: String, retKind: Integer)                  // record a callee's return kind (0 int, 1 String, 2 Number)
     mapper   fnsig_ret_str(name: String) -> Integer                     // 1 if the callee returns a String
-    mapper   fnsig_ret_num(name: String) -> Integer                     // 1 if the callee returns a Number
+    mapper   fnsig_ret_kind(name: String) -> Integer                    // the callee's full native return kind
     producer ctype_reset()                                              // clear the compound-type registry
     producer ctype_add(name: String, isRef: Integer) -> Integer         // register a type (1=class, 2=interface), return index
     mapper   ctype_is_ref(ti: Integer) -> Integer                       // 1 = class (heap pointer), 2 = interface
