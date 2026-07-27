@@ -205,6 +205,12 @@ XC_OUT="$W" "$XC" --backend native "$W/xm.xi" >/dev/null 2>&1
 xmout=$("$W/xm" 2>/dev/null | tr '\n' ' ')
 if [ "$xmout" = "1 0 " ]; then echo "  ✓ extension method: s.startsWith2 -> 1, 0"; else echo "  ✗ extension method printed \"$xmout\""; fail=1; fi
 
+# Array parameter + Integer[] extension method (receiver passed as three slots).
+printf 'mapper total(xs: Integer[]) -> Integer { let s = 0  for x in xs { s = s + x }  return s }\nmapper Integer[].maxOr(f: Integer) -> Integer { let m = f  for x in this { if x > m { m = x } }  return m }\nextern "C" { producer xstd_put_int(n: Integer) }\nmodule M { entry main(args: String[]) -> Integer { xstd_put_int(total([1, 2, 3, 4]))  let a = [3, 9, 2, 7]  xstd_put_int(a.maxOr(0))  return 0 } }\n' > "$W/ap.xi"
+XC_OUT="$W" "$XC" --backend native "$W/ap.xi" >/dev/null 2>&1
+apout=$("$W/ap" 2>/dev/null | tr '\n' ' ')
+if [ "$apout" = "10 9 " ]; then echo "  ✓ array param + ext: total=10, maxOr=9"; else echo "  ✗ array param printed \"$apout\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1

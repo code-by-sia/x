@@ -622,6 +622,8 @@ mapper extKeyOf(kind: Integer) -> String {
     if kind == 0 { return "Integer" }
     if kind == 1 { return "String" }
     if kind == numKind() { return "Number" }
+    if kind == 2 { return "arr_integer" }               // Integer[]
+    if kind >= 1000 { return "arr_" + ctype_name(kind - 1000) }   // I[]
     return ""
 }
 
@@ -1051,6 +1053,11 @@ mapper parseNativeParams(pstr: String) -> ParamParse {
             if pct == "xc_bool_t"    { kind = 0 }        // Bool is a 1-slot Integer
             if pct == "xc_string_t"  { kind = 1 }
             if pct == "xc_number_t"  { kind = numKind() }
+            if pct == "xc_arr_integer_t" { kind = 2 }    // Integer[]
+            if kind < 0 and pct.startsWith2("xc_arr_") { // I[]: an array of a registered class/interface
+                let et = ctype_index(string_slice(pct, 7, string_len(pct) - 2))
+                if et >= 0 and ctype_is_ref(et) >= 1 { kind = 1000 + et }
+            }
             if kind < 0 and pct.startsWith2("xc_") and string_len(pct) > 5 {   // a class or interface value
                 let ti = ctype_index(string_slice(pct, 3, string_len(pct) - 2))
                 if ti >= 0 { kind = 3 + ti }
