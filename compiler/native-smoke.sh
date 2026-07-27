@@ -211,6 +211,13 @@ XC_OUT="$W" "$XC" --backend native "$W/ap.xi" >/dev/null 2>&1
 apout=$("$W/ap" 2>/dev/null | tr '\n' ' ')
 if [ "$apout" = "10 9 " ]; then echo "  ✓ array param + ext: total=10, maxOr=9"; else echo "  ✗ array param printed \"$apout\""; fail=1; fi
 
+# Multi-slot-element arrays: String[] (2-slot elements) and a compound[] iterated
+# with for-in and field access.
+printf 'type P = { x: Integer, y: Integer }\nmapper lenSum(xs: String[]) -> Integer { let t = 0  for s in xs { t = t + string_len(s) }  return t }\nextern "C" { producer xstd_put_int(n: Integer) }\nmodule M { entry main(args: String[]) -> Integer { xstd_put_int(lenSum(["a", "bb", "ccc"]))  let pts = [P { x: 1, y: 2 }, P { x: 3, y: 4 }]  let s = 0  for p in pts { s = s + p.x + p.y }  xstd_put_int(s)  return 0 } }\n' > "$W/ma.xi"
+XC_OUT="$W" "$XC" --backend native "$W/ma.xi" >/dev/null 2>&1
+maout=$("$W/ma" 2>/dev/null | tr '\n' ' ')
+if [ "$maout" = "6 10 " ]; then echo "  ✓ multi-slot arrays: String[] lens 6, compound[] sum 10"; else echo "  ✗ multi-slot arrays printed \"$maout\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1

@@ -39,17 +39,37 @@ type PS = {
 // the type range (3+ti) and the ref-array range (1000+ti).
 mapper numKind() -> Integer => 2000000
 
+// Array-of-String kind (elements are two-slot Strings). Above numKind() so it is
+// still caught by the `>= 1000` fat-pointer width rule.
+mapper strArrKind() -> Integer => 2000001
+
 mapper slotWidth(kind: Integer) -> Integer {
     if kind == 1 { return 2 }
     if kind == 2 { return 3 }
     if kind == numKind() { return 1 }                  // a double occupies one slot
-    if kind >= 1000 { return 3 }                       // an array of refs: { data, len, cap }
+    if kind >= 1000 { return 3 }                       // any array: { data, len, cap }
     if kind >= 3 {
         let r = ctype_is_ref(kind - 3)
         if r == 1 or r == 2 { return 1 }               // a class or interface value is one pointer slot
         return ctype_width(kind - 3)                   // a compound (0) or sum (3): inline value
     }
     return 1
+}
+
+// Is `kind` an array type, and if so what is its element's kind?
+predicate isArr(kind: Integer) {
+    return kind == 2 or kind == strArrKind() or (kind >= 1000 and kind < numKind())
+}
+mapper arrElemKind(kind: Integer) -> Integer {
+    if kind == 2 { return 0 }                          // Integer[]
+    if kind == strArrKind() { return 1 }               // String[]
+    return 3 + (kind - 1000)                            // array of a ctype (class/interface/compound)
+}
+// The array kind holding elements of `elemKind`.
+mapper arrKindOf(elemKind: Integer) -> Integer {
+    if elemKind == 1 { return strArrKind() }
+    if elemKind >= 3 { return 1000 + (elemKind - 3) }
+    return 2                                            // Integer[] (also the default/empty)
 }
 
 mapper psKind(ps: PS) -> Integer {
@@ -392,6 +412,14 @@ mapper psEmitAloadK(ps: PS, ptrSlot: Integer, idxSlot: Integer, kind: Integer) -
 mapper psEmitAload(ps: PS, ptrSlot: Integer, idxSlot: Integer) -> PS {
     return psEmitAloadK(ps, ptrSlot, idxSlot, 0)
 }
+// Load an element of any width (String = 2 slots, a compound = its width) at a
+// variable index, tagged with the element kind.
+mapper psEmitAloadN(ps: PS, ptrSlot: Integer, idxSlot: Integer, elemKind: Integer) -> PS {
+    let w = slotWidth(elemKind)
+    let t = ps.nextSlot
+    let p = psEmit(bumpSlots(ps, w), xi_aloadn(t, ptrSlot, idxSlot, w))
+    return psKindResult(p, t, elemKind)
+}
 
 // Build { data, len, cap } holding one freshly-constructed instance of every
 // class implementing interface `ii` (a list-injected `I[]` dependency).
@@ -420,11 +448,13 @@ mapper psEmitImplList(ps: PS, ii: Integer) -> PS {
     return psKindResult(p, base, 1000 + ii)
 }
 
-// An Integer[] literal: allocate n*8 bytes, store each element, and produce the
-// three-slot fat pointer { data, len, cap }.
-mapper psEmitArrayLit(ps: PS, elemSlots: Integer[]) -> PS {
+// An array literal: allocate n * elemWidth * 8 bytes, store each element's slots,
+// and produce the three-slot fat pointer { data, len, cap }. `elemSlots` holds
+// each element's base slot; a String or compound element spans several slots.
+mapper psEmitArrayLit(ps: PS, elemSlots: Integer[], elemKind: Integer) -> PS {
     let n = intArrLen(elemSlots)
-    let c1 = psEmitConst(ps, n * 8)                    // byte size
+    let ew = slotWidth(elemKind)
+    let c1 = psEmitConst(ps, n * ew * 8)               // byte size
     let args: Integer[] = []
     args = appendInt(args, c1.resultTemp)
     let c2 = psEmitCall(c1, "xstd_alloc", args, c1.nextSlot, false)
@@ -436,19 +466,22 @@ mapper psEmitArrayLit(ps: PS, elemSlots: Integer[]) -> PS {
     p = psEmit(p, xi_const(base + 2, n))
     let i = 0
     while i < n {
-        p = psEmit(p, xi_astorec(base, i, intArrGet(elemSlots, i)))
+        let j = 0
+        while j < ew { p = psEmit(p, xi_astorec(base, i * ew + j, intArrGet(elemSlots, i) + j))  j = j + 1 }
         i = i + 1
     }
-    return psKindResult(p, base, 2)
+    return psKindResult(p, base, arrKindOf(elemKind))
 }
 
-// arraylit := '[' (expr (',' expr)*)? ']'
+// arraylit := '[' (expr (',' expr)*)? ']'    — element kind taken from the first.
 mapper parseArrayLit(ps: PS) -> PS {
     let cur = psAdvance(ps)                            // consume '['
     let elemSlots: Integer[] = []
+    let elemKind = 0
     if psKind(cur) != 105 {
         let e = parseExpr(cur)
         if not e.ok { return e }
+        elemKind = e.resultKind
         elemSlots = appendInt(elemSlots, e.resultTemp)
         cur = e
         while psKind(cur) == 106 {
@@ -459,7 +492,7 @@ mapper parseArrayLit(ps: PS) -> PS {
         }
     }
     if psKind(cur) != 105 { return psFail(cur) }       // ']'
-    return psEmitArrayLit(psAdvance(cur), elemSlots)
+    return psEmitArrayLit(psAdvance(cur), elemSlots, elemKind)
 }
 
 // One call argument: its value slot(s), plus a parallel per-slot float flag (a
@@ -623,7 +656,8 @@ mapper extKeyOf(kind: Integer) -> String {
     if kind == 1 { return "String" }
     if kind == numKind() { return "Number" }
     if kind == 2 { return "arr_integer" }               // Integer[]
-    if kind >= 1000 { return "arr_" + ctype_name(kind - 1000) }   // I[]
+    if kind == strArrKind() { return "arr_string" }     // String[]
+    if kind >= 1000 and kind < numKind() { return "arr_" + ctype_name(kind - 1000) }   // I[] / compound[]
     return ""
 }
 
@@ -688,9 +722,8 @@ mapper parsePostfix(ps: PS) -> PS {
             }
             }
         }
-        else {                                      // Integer[] (kind 2) or a ref array (>= 1000)
-        let elemKind = 0
-        if cur.resultKind >= 1000 { elemKind = 3 + (cur.resultKind - 1000) }   // element is a class/interface ref
+        else {                                      // an array: Integer[]/String[]/ref/compound array
+        let elemKind = arrElemKind(cur.resultKind)
         if field == "len" { cur = psKindResult(after, cur.resultTemp + 1, 0) }
         else {
             if field == "cap" { cur = psKindResult(after, cur.resultTemp + 2, 0) }
@@ -701,7 +734,7 @@ mapper parsePostfix(ps: PS) -> PS {
                     let idx = parseExpr(psAdvance(after))
                     if not idx.ok { return idx }
                     if psKind(idx) != 105 { return psFail(idx) }       // ']'
-                    cur = psEmitAloadK(psAdvance(idx), ptrSlot, idx.resultTemp, elemKind)
+                    cur = psEmitAloadN(psAdvance(idx), ptrSlot, idx.resultTemp, elemKind)
                 } else { return psFail(cur) }
             }
         }
@@ -900,22 +933,21 @@ mapper parseForIn(ps: PS) -> PS {
     if psKind(p2) != 229 { return psFail(p2) }      // 'in'
     let coll = parseExpr(psAdvance(p2))
     if not coll.ok { return coll }
-    let ak = coll.resultKind
-    let elemKind = 0
-    if ak >= 1000 { elemKind = 3 + (ak - 1000) }    // ref array element
-    else { if ak != 2 { return psFail(coll) } }     // else must be Integer[]
+    if not isArr(coll.resultKind) { return psFail(coll) }
+    let elemKind = arrElemKind(coll.resultKind)
+    let ew = slotWidth(elemKind)                    // an element may span several slots
     let arrBase = coll.resultTemp                   // data / len / cap
     let lenSlot = arrBase + 1
     let iSlot = coll.nextSlot
     let xSlot = coll.nextSlot + 1
-    let pinit = psEmit(bumpSlots(coll, 2), xi_const(iSlot, 0))       // i = 0; reserve i and x
+    let pinit = psEmit(bumpSlots(coll, 1 + ew), xi_const(iSlot, 0))  // i = 0; reserve i and x (ew slots)
     let pbind = bindLocal(pinit, varName, xSlot, elemKind)
     let lStart = pbind.nextLabel
     let lEnd = pbind.nextLabel + 1
     let pstart = psEmit(withNextLabel(pbind, pbind.nextLabel + 2), xi_label(lStart))
     let pcmp = psEmitCmp(pstart, "slt", iSlot, lenSlot)              // i < len
     let pbrz = psEmit(pcmp, xi_brz(pcmp.resultTemp, lEnd))
-    let pload = psEmit(pbrz, xi_aload(xSlot, arrBase, iSlot))        // x = data[i]
+    let pload = psEmit(pbrz, xi_aloadn(xSlot, arrBase, iSlot, ew))   // x = data[i] (ew slots)
     let pbody = parseBlock(pload)
     if not pbody.ok { return pbody }
     let pinc = psEmitBin(psEmitConst(pbody, 1), "add", iSlot, pbody.nextSlot)   // i = i + 1
@@ -1053,10 +1085,11 @@ mapper parseNativeParams(pstr: String) -> ParamParse {
             if pct == "xc_bool_t"    { kind = 0 }        // Bool is a 1-slot Integer
             if pct == "xc_string_t"  { kind = 1 }
             if pct == "xc_number_t"  { kind = numKind() }
-            if pct == "xc_arr_integer_t" { kind = 2 }    // Integer[]
-            if kind < 0 and pct.startsWith2("xc_arr_") { // I[]: an array of a registered class/interface
+            if pct == "xc_arr_integer_t" { kind = 2 }              // Integer[]
+            if pct == "xc_arr_string_t"  { kind = strArrKind() }   // String[]
+            if kind < 0 and pct.startsWith2("xc_arr_") {           // an array of a registered type
                 let et = ctype_index(string_slice(pct, 7, string_len(pct) - 2))
-                if et >= 0 and ctype_is_ref(et) >= 1 { kind = 1000 + et }
+                if et >= 0 { kind = 1000 + et }
             }
             if kind < 0 and pct.startsWith2("xc_") and string_len(pct) > 5 {   // a class or interface value
                 let ti = ctype_index(string_slice(pct, 3, string_len(pct) - 2))
