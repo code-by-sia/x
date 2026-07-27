@@ -57,6 +57,8 @@ extern "C" {
     mapper   ctype_nfields(ti: Integer) -> Integer                      // number of fields
     mapper   ctype_field_kind_at(ti: Integer, f: Integer) -> Integer    // kind of field f
     mapper   ctype_field_off_at(ti: Integer, f: Integer) -> Integer     // slot offset of field f
+    producer ctype_set_field_default(ti: Integer, fname: String, val: Integer)   // record a non-zero constant state default
+    mapper   ctype_field_default_at(ti: Integer, f: Integer) -> Integer          // the field's constant default (0 = none)
     producer bind_reset()                                               // clear the interface->class binds
     producer bind_add(iface: String, cls: String)                       // record a bind
     mapper   bind_class(iface: String) -> String                        // the class bound to iface, or ""

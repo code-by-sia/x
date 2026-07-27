@@ -523,6 +523,7 @@ static int ct_width[CT_MAX];
 static xc_string_t ct_fname[CT_MAX][CT_FMAX];
 static int ct_fkind[CT_MAX][CT_FMAX];
 static int ct_foff[CT_MAX][CT_FMAX];
+static long long ct_fdef[CT_MAX][CT_FMAX];   /* non-zero constant state default (0 = none) */
 static int ct_ref[CT_MAX];   /* 1 = class (heap pointer), 2 = interface, 0 = inline compound */
 static int ct_n = 0;
 static int ct_streq(xc_string_t a, xc_string_t b) { return a.len == b.len && memcmp(a.data, b.data, a.len) == 0; }
@@ -580,9 +581,14 @@ xc_integer_t iface_impl_at(xc_integer_t ii, xc_integer_t k) {
 }
 void ctype_add_field(xc_integer_t ti, xc_string_t fname, xc_integer_t fkind, xc_integer_t fwidth) {
     int t = (int)ti, f = ct_nf[t];
-    ct_fname[t][f] = fname; ct_fkind[t][f] = (int)fkind; ct_foff[t][f] = ct_width[t];
+    ct_fname[t][f] = fname; ct_fkind[t][f] = (int)fkind; ct_foff[t][f] = ct_width[t]; ct_fdef[t][f] = 0;
     ct_width[t] += (int)fwidth; ct_nf[t]++;
 }
+void ctype_set_field_default(xc_integer_t ti, xc_string_t fname, xc_integer_t val) {
+    int t = (int)ti;
+    for (int f = 0; f < ct_nf[t]; f++) if (ct_streq(ct_fname[t][f], fname)) { ct_fdef[t][f] = (long long)val; return; }
+}
+xc_integer_t ctype_field_default_at(xc_integer_t ti, xc_integer_t f) { return (xc_integer_t)ct_fdef[(int)ti][(int)f]; }
 xc_integer_t ctype_index(xc_string_t name) {
     for (int i = 0; i < ct_n; i++) if (ct_streq(ct_name[i], name)) return i;
     return -1;

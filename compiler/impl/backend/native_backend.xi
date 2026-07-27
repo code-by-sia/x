@@ -269,6 +269,12 @@ mapper emitConstruct(ps: PS, ci: Integer) -> PS {
             if fk >= 3 and ctype_is_ref(fk - 3) == 1 { // a single dep: construct and store it
                 let dc = psEmitResolveClass(cur, fk - 3)
                 cur = psEmit(dc, xi_astorec(ptrSlot, off, dc.resultTemp))
+            } else {
+                let def = ctype_field_default_at(ci, i)   // a non-zero constant state default
+                if def != 0 and fk == 0 {
+                    let dc = psEmitConst(cur, def)
+                    cur = psEmit(dc, xi_astorec(ptrSlot, off, dc.resultTemp))
+                }
             }
         }
         i = i + 1
@@ -1405,6 +1411,39 @@ producer registerTypes(prog: Program) {
             }
         }
         addFields(ci, c.stateFields)
+    }
+    registerStateDefaults(prog)
+}
+
+// Record non-zero constant state defaults (`state { n: Integer = 5 }`). The
+// stateInit token stream is `name [= expr] [,]` per field; only a single Integer
+// or `true` literal is treated as a constant (calloc already gives 0 / "" / [] /
+// false, so the common zero defaults need nothing).
+producer registerStateDefaults(prog: Program) {
+    for c in prog.classes {
+        let ci = ctype_index(c.name)
+        let toks = c.stateInit
+        let n = tokenArrLen(toks)
+        let i = 0
+        while i < n {
+            let fname = tokenArrGet(toks, i).text
+            i = i + 1
+            if i < n and tokenArrGet(toks, i).kind == 111 {          // '='
+                i = i + 1
+                if i < n {
+                    let t = tokenArrGet(toks, i)
+                    let val = 0
+                    let isConst = false
+                    if t.kind == 2 { val = digitsToInt(t.text)  isConst = true }
+                    if t.kind == 236 { val = 1  isConst = true }     // true
+                    let endsHere = i + 1 >= n
+                    if i + 1 < n and tokenArrGet(toks, i + 1).kind == 106 { endsHere = true }
+                    if isConst and endsHere and val != 0 { ctype_set_field_default(ci, fname, val) }
+                }
+                while i < n and tokenArrGet(toks, i).kind != 106 { i = i + 1 }   // skip to ','
+            }
+            if i < n and tokenArrGet(toks, i).kind == 106 { i = i + 1 }          // ','
+        }
     }
 }
 

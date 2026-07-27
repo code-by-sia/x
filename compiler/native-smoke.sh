@@ -245,6 +245,12 @@ XC_OUT="$W" "$XC" --backend native "$W/tl.xi" >/dev/null 2>&1
 tlout=$("$W/tl" 2>/dev/null | tr '\n' ' ')
 if [ "$tlout" = "5 3.5 60 " ]; then echo "  ✓ typed let: a=5, n:Number=3->3.5, xs sum 60"; else echo "  ✗ typed let printed \"$tlout\""; fail=1; fi
 
+# Non-zero constant state defaults (calloc handles the zero/empty ones).
+printf 'interface Box { projector total() -> Integer }\nclass B implements Box { deps {} state { n: Integer = 5, m: Integer = 37 } projector total() -> Integer { return this.n + this.m } }\nextern "C" { producer xstd_put_int(n: Integer) }\nmodule M { bind Box -> B\n entry main(args: String[]) -> Integer { let b = M.resolve(Box)  xstd_put_int(b.total())  return 0 } }\n' > "$W/sd.xi"
+XC_OUT="$W" "$XC" --backend native "$W/sd.xi" >/dev/null 2>&1
+sdout=$("$W/sd" 2>/dev/null)
+if [ "$sdout" = "42" ]; then echo "  ✓ state defaults: n=5 + m=37 -> 42"; else echo "  ✗ state defaults printed \"$sdout\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1
