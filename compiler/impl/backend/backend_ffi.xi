@@ -29,7 +29,6 @@ extern "C" {
     producer xcb_len(h: Integer) -> Integer             // current length
     producer xcb_sha256_append(h: Integer, from: Integer, to: Integer)  // append SHA-256 of buf[from,to)
     producer xcb_ascii_unescape(h: Integer, s: String)                  // append s with \n \t ... resolved
-    mapper   unescapedLen(s: String) -> Integer                         // byte length after unescaping
     producer strpool_reset()                                            // clear the string-constant pool
     mapper   strpool_add(s: String) -> Integer                          // add a raw literal, return its id
     mapper   strpool_len() -> Integer
@@ -69,6 +68,20 @@ extern "C" {
     mapper   iface_nimpls(ii: Integer) -> Integer                       // how many classes implement interface ii
     mapper   iface_impl_at(ii: Integer, k: Integer) -> Integer          // class index of the k-th implementor, or -1
     producer xcb_write_exec(h: Integer, path: String) -> Integer        // write + chmod +x; 0 = ok
+}
+
+// Byte length of a string literal's text after resolving escapes: a backslash
+// with a following character collapses the pair to one byte.
+mapper unescapedLen(s: String) -> Integer {
+    let len = string_len(s)
+    let n = 0
+    let i = 0
+    while i < len {
+        if string_char_at(s, i) == 92 and i + 1 < len { i = i + 1 }   // '\' escapes the next char
+        i = i + 1
+        n = n + 1
+    }
+    return n
 }
 
 // Decimal value of an integer-literal token's text (non-negative).

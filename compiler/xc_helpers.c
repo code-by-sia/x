@@ -637,11 +637,6 @@ xc_integer_t ctype_field_kind_at(xc_integer_t ti, xc_integer_t f) { return ct_fk
 xc_integer_t ctype_field_off_at(xc_integer_t ti, xc_integer_t f) { return ct_foff[(int)ti][(int)f]; }
 
 /* Unescape a source string literal (\n \t \r \0 \\ \" ...) — length, and append. */
-xc_integer_t unescapedLen(xc_string_t s) {
-    xc_integer_t n = 0;
-    for (size_t i = 0; i < s.len; i++) { if (s.data[i] == '\\' && i + 1 < s.len) i++; n++; }
-    return n;
-}
 void xcb_ascii_unescape(xc_integer_t h, xc_string_t s) {
     for (size_t i = 0; i < s.len; i++) {
         unsigned char c = (unsigned char)s.data[i];
