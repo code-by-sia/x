@@ -577,11 +577,8 @@ static inline xc_string_t string_slice(xc_string_t s, xc_integer_t from, xc_inte
     return (xc_string_t){ .data = s.data + from, .len = (xc_size_t)(to - from) };
 }
 
-/* Character class helpers */
-static inline xc_bool_t is_alpha(xc_integer_t c)  { return isalpha((int)c) != 0; }
-static inline xc_bool_t is_digit(xc_integer_t c)  { return isdigit((int)c) != 0; }
-static inline xc_bool_t is_alnum(xc_integer_t c)  { return isalnum((int)c) != 0; }
-static inline xc_bool_t is_space_c(xc_integer_t c){ return isspace((int)c) != 0; }
+/* Character class predicates (is_alpha/is_digit/is_alnum/is_space_c) are pure
+ * ASCII-range logic and now live in Xi (impl/ffi/text/std_text.xi). */
 
 /* Integer → string conversion (heap-allocated) */
 static inline xc_string_t int_to_string(xc_integer_t n) { return xc_integer_to_string(n); }

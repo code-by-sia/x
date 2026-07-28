@@ -167,12 +167,6 @@ xc_DecisionTable_t decisionTableGet(xc_arr_DecisionTable_t a, xc_integer_t i) { 
 
 /* ─── String utility ─────────────────────────────────────────────────────── */
 
-xc_integer_t findChar(xc_string_t s, xc_integer_t c) {
-    for (xc_size_t i = 0; i < s.len; i++)
-        if ((xc_integer_t)(unsigned char)s.data[i] == c) return (xc_integer_t)i;
-    return (xc_integer_t)s.len;
-}
-
 /* ─── Invoke the C compiler to produce a native executable ──────────────────
  * Compiles the generated C (cpath) together with the X runtime into a native
  * binary (binpath).  The runtime directory is taken from the XC_RUNTIME
