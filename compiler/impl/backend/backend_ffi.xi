@@ -19,16 +19,11 @@ extern "C" {
     mapper   appendEncodedFunc(arr: EncodedFunc[], v: EncodedFunc) -> EncodedFunc[]
 
     producer xcb_new() -> Integer                       // fresh buffer handle
-    producer xcb_u8(h: Integer, v: Integer)             // append one byte
-    producer xcb_u32(h: Integer, v: Integer)            // append u32 little-endian
-    producer xcb_u64(h: Integer, v: Integer)            // append u64 little-endian
-    producer xcb_u32be(h: Integer, v: Integer)          // append u32 big-endian
-    producer xcb_u64be(h: Integer, v: Integer)          // append u64 big-endian
-    producer xcb_zeros(h: Integer, n: Integer)          // append n zero bytes
-    producer xcb_ascii(h: Integer, s: String)           // append a string's bytes (no NUL)
+    producer xcb_u8(h: Integer, v: Integer)             // append one byte (the only real byte-append primitive)
     producer xcb_len(h: Integer) -> Integer             // current length
     producer xcb_sha256_append(h: Integer, from: Integer, to: Integer)  // append SHA-256 of buf[from,to)
-    producer xcb_ascii_unescape(h: Integer, s: String)                  // append s with \n \t ... resolved
+    // Multi-byte and string appends (xcb_u32/u64/u32be/u64be, zeros, ascii,
+    // ascii_unescape) are pure loops over xcb_u8 and live in Xi below.
     producer strpool_reset()                                            // clear the string-constant pool
     mapper   strpool_add(s: String) -> Integer                          // add a raw literal, return its id
     mapper   strpool_len() -> Integer
@@ -68,6 +63,77 @@ extern "C" {
     mapper   iface_nimpls(ii: Integer) -> Integer                       // how many classes implement interface ii
     mapper   iface_impl_at(ii: Integer, k: Integer) -> Integer          // class index of the k-th implementor, or -1
     producer xcb_write_exec(h: Integer, path: String) -> Integer        // write + chmod +x; 0 = ok
+}
+
+// Byte splitting for the object writer. Xi has no bitwise operators, but a byte
+// is an arithmetic slice: byte k of v (little-endian) is (v / 256^k) % 256. Every
+// value written to the image is a non-negative Mach-O offset, size or magic
+// number, so this matches the shift-and-mask a C compiler would emit exactly.
+producer xcb_u32(h: Integer, v: Integer) {
+    xcb_u8(h, v % 256)
+    xcb_u8(h, (v / 256) % 256)
+    xcb_u8(h, (v / 65536) % 256)
+    xcb_u8(h, (v / 16777216) % 256)
+}
+producer xcb_u64(h: Integer, v: Integer) {
+    let x = v
+    let i = 0
+    while i < 8 {
+        xcb_u8(h, x % 256)
+        x = x / 256
+        i = i + 1
+    }
+}
+producer xcb_u32be(h: Integer, v: Integer) {
+    xcb_u8(h, (v / 16777216) % 256)
+    xcb_u8(h, (v / 65536) % 256)
+    xcb_u8(h, (v / 256) % 256)
+    xcb_u8(h, v % 256)
+}
+producer xcb_u64be(h: Integer, v: Integer) {
+    let i = 7
+    while i >= 0 {
+        let p = 1
+        let k = 0
+        while k < i { p = p * 256  k = k + 1 }
+        xcb_u8(h, (v / p) % 256)
+        i = i - 1
+    }
+}
+
+// Append n zero bytes.
+producer xcb_zeros(h: Integer, n: Integer) {
+    let i = 0
+    while i < n { xcb_u8(h, 0)  i = i + 1 }
+}
+
+// Append a string's bytes verbatim (no NUL terminator).
+producer xcb_ascii(h: Integer, s: String) {
+    let n = string_len(s)
+    let i = 0
+    while i < n { xcb_u8(h, string_char_at(s, i))  i = i + 1 }
+}
+
+// Append a string with C-style escapes resolved: a backslash and the next char
+// collapse to one byte (\n \t \r \0 map to their control codes; any other
+// escaped char is taken literally).
+producer xcb_ascii_unescape(h: Integer, s: String) {
+    let n = string_len(s)
+    let i = 0
+    while i < n {
+        let c = string_char_at(s, i)
+        if c == 92 and i + 1 < n {          // '\'
+            i = i + 1
+            let d = string_char_at(s, i)
+            if d == 110 { c = 10 }           // \n
+            else if d == 116 { c = 9 }       // \t
+            else if d == 114 { c = 13 }      // \r
+            else if d == 48 { c = 0 }        // \0
+            else { c = d }
+        }
+        xcb_u8(h, c)
+        i = i + 1
+    }
 }
 
 // Byte length of a string literal's text after resolving escapes: a backslash

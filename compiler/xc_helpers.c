@@ -464,12 +464,8 @@ xc_integer_t xcb_new(void) {
     return (xc_integer_t)h;
 }
 void xcb_u8(xc_integer_t h, xc_integer_t v) { xcb_grow((int)h, 1); xcb_p[h][xcb_l[h]++] = (unsigned char)(v & 0xff); }
-void xcb_u32(xc_integer_t h, xc_integer_t v)   { for (int i = 0; i < 4; i++) xcb_u8(h, (v >> (8*i)) & 0xff); }
-void xcb_u64(xc_integer_t h, xc_integer_t v)   { for (int i = 0; i < 8; i++) xcb_u8(h, (v >> (8*i)) & 0xff); }
-void xcb_u32be(xc_integer_t h, xc_integer_t v) { for (int i = 3; i >= 0; i--) xcb_u8(h, (v >> (8*i)) & 0xff); }
-void xcb_u64be(xc_integer_t h, xc_integer_t v) { for (int i = 7; i >= 0; i--) xcb_u8(h, (v >> (8*i)) & 0xff); }
-void xcb_zeros(xc_integer_t h, xc_integer_t n) { for (xc_integer_t i = 0; i < n; i++) xcb_u8(h, 0); }
-void xcb_ascii(xc_integer_t h, xc_string_t s)  { for (size_t i = 0; i < s.len; i++) xcb_u8(h, (unsigned char)s.data[i]); }
+/* xcb_u32/u64/u32be/u64be, xcb_zeros and xcb_ascii are pure loops over xcb_u8;
+ * they live in Xi now (compiler/impl/backend/backend_ffi.xi). */
 xc_integer_t xcb_len(xc_integer_t h) { return (xc_integer_t)xcb_l[h]; }
 void xcb_sha256_append(xc_integer_t h, xc_integer_t from, xc_integer_t to) {
     xcsha_t c; xcsha_init(&c); xcsha_update(&c, xcb_p[h] + from, (size_t)(to - from));
@@ -637,17 +633,8 @@ xc_integer_t ctype_field_kind_at(xc_integer_t ti, xc_integer_t f) { return ct_fk
 xc_integer_t ctype_field_off_at(xc_integer_t ti, xc_integer_t f) { return ct_foff[(int)ti][(int)f]; }
 
 /* Unescape a source string literal (\n \t \r \0 \\ \" ...) — length, and append. */
-void xcb_ascii_unescape(xc_integer_t h, xc_string_t s) {
-    for (size_t i = 0; i < s.len; i++) {
-        unsigned char c = (unsigned char)s.data[i];
-        if (c == '\\' && i + 1 < s.len) {
-            unsigned char d = (unsigned char)s.data[++i];
-            if (d == 'n') c = '\n'; else if (d == 't') c = '\t';
-            else if (d == 'r') c = '\r'; else if (d == '0') c = '\0'; else c = d;
-        }
-        xcb_u8(h, c);
-    }
-}
+/* xcb_ascii_unescape is a pure loop over xcb_u8; it lives in Xi now
+ * (compiler/impl/backend/backend_ffi.xi). */
 xc_integer_t xcb_write_exec(xc_integer_t h, xc_string_t path) {
     char* p = xc_string_to_cstr(path);
     FILE* f = fopen(p, "wb");
