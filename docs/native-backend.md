@@ -23,7 +23,7 @@ The runtime is not rewritten for this. A prebuilt runtime object ships per platf
 The native backend is being built in stages behind the flag, with the C backend as the untouched default the whole way. Today it compiles `Integer`- and `String`-typed functions: `main` plus any top-level function whose parameters and return are `Integer` or `String`. A body may use:
 
 - `let` bindings (with or without a `: Type` annotation, which types an empty array and promotes an `Integer` initializer to a `Number`), assignment, and `return`;
-- `if` / `else` and `while`;
+- `if` / `else`, `while`, and `for x in`, with `break` and `continue` (a `for` loop's `continue` still runs the index increment, so the walk advances);
 - calls to other integer functions (including recursion and mutual recursion);
 - calls to declared `extern "C"` functions with integer or string-literal arguments (bound from libSystem or the runtime by dyld — see below);
 - string literals, string locals, and string concatenation with `+` (a String value is a pointer plus a length, two registers / two stack slots; concatenation calls the runtime);
@@ -99,6 +99,7 @@ Supporting a new arch_os is therefore additive: write an `InsnEncoder` for the i
 | Sum types and `match` (tag + payload, variant patterns) | done |
 | `Number` (double) arithmetic, comparison, parameters, returns, fields | done |
 | Boolean `and` / `or` (short-circuit), `not`, and unary minus | done |
+| `break` / `continue` in `while` and `for` loops | done |
 | Full language coverage, diffed against the C backend | planned |
 | Self-host: compile the compiler with the native backend | planned |
 | Second target (Linux ELF, x86-64) | planned |

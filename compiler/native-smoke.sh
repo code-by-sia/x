@@ -258,6 +258,13 @@ XC_OUT="$W" "$XC" --backend native "$W/bl.xi" >/dev/null 2>&1
 blout=$("$W/bl" 2>/dev/null | tr '\n' ' ')
 if [ "$blout" = "0 7 12 " ]; then echo "  ✓ boolean/unary: short-circuit and->0, and/or/not->7, -8+20->12"; else echo "  ✗ boolean/unary printed \"$blout\""; fail=1; fi
 
+# break / continue in while and for loops. `continue` in a `for` must still run
+# the index increment (no infinite loop), and `break` must exit the loop.
+printf 'extern "C" { producer xstd_put_int(n: Integer) }\nmodule M { entry main(args: String[]) -> Integer { let a = 0  let i = 0  while i < 100 { if i == 5 { break }  a = a + i  i = i + 1 }  xstd_put_int(a)  let xs = [1, 2, 3, 4]  let b = 0  for x in xs { if x == 3 { continue }  b = b + x }  xstd_put_int(b)  return 0 } }\n' > "$W/lc.xi"
+XC_OUT="$W" "$XC" --backend native "$W/lc.xi" >/dev/null 2>&1
+lcout=$("$W/lc" 2>/dev/null | tr '\n' ' ')
+if [ "$lcout" = "10 7 " ]; then echo "  ✓ loop control: while+break->10, for+continue->7"; else echo "  ✗ loop control printed \"$lcout\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1

@@ -932,11 +932,13 @@ mapper parseExpr(ps: PS) -> PS {
 }
 
 // block := '{' stmt* '}'
-mapper parseBlock(ps: PS) -> PS {
+// `brk` / `cont` are the branch targets for `break` / `continue` in the nearest
+// enclosing loop, or -1 when there is none (a break/continue there is refused).
+mapper parseBlock(ps: PS, brk: Integer, cont: Integer) -> PS {
     if psKind(ps) != 102 { return psFail(ps) }
     let cur = psAdvance(ps)
     while psKind(cur) != 103 and psKind(cur) != 0 {
-        cur = parseStmt(cur)
+        cur = parseStmt(cur, brk, cont)
         if not cur.ok { return cur }
     }
     if psKind(cur) != 103 { return psFail(cur) }
@@ -1017,20 +1019,21 @@ mapper parseReturn(ps: PS) -> PS {
     return PS { toks: p2.toks, pos: p2.pos, insns: p2.insns, nextSlot: p2.nextSlot, resultTemp: p2.resultTemp, ok: p2.ok, names: p2.names, slots: p2.slots, nextLabel: p2.nextLabel, lastRet: true, kinds: p2.kinds, resultKind: p2.resultKind }
 }
 
-// if cond { then } [ else { else } ]
-mapper parseIf(ps: PS) -> PS {
+// if cond { then } [ else { else } ]   (break/continue in either branch target
+// the enclosing loop, so `brk` / `cont` pass straight through)
+mapper parseIf(ps: PS, brk: Integer, cont: Integer) -> PS {
     let p1 = parseExpr(psAdvance(ps))
     if not p1.ok { return p1 }
     let cond = p1.resultTemp
     let lElse = p1.nextLabel
     let p3 = psEmit(withNextLabel(p1, lElse + 1), xi_brz(cond, lElse))
-    let p4 = parseBlock(p3)
+    let p4 = parseBlock(p3, brk, cont)
     if not p4.ok { return p4 }
     if psKind(p4) == 223 {                       // else
         let lEnd = p4.nextLabel
         let p6 = psEmit(withNextLabel(p4, lEnd + 1), xi_br(lEnd))
         let p7 = psEmit(p6, xi_label(lElse))
-        let p8 = parseBlock(psAdvance(p7))       // consume 'else'
+        let p8 = parseBlock(psAdvance(p7), brk, cont)       // consume 'else'
         if not p8.ok { return p8 }
         return psEmit(p8, xi_label(lEnd))
     }
@@ -1045,7 +1048,7 @@ mapper parseWhile(ps: PS) -> PS {
     let p2 = parseExpr(psAdvance(p1))            // consume 'while', parse condition
     if not p2.ok { return p2 }
     let p3 = psEmit(p2, xi_brz(p2.resultTemp, lEnd))
-    let p4 = parseBlock(p3)
+    let p4 = parseBlock(p3, lEnd, lStart)       // break -> exit, continue -> re-test the condition
     if not p4.ok { return p4 }
     let p5 = psEmit(p4, xi_br(lStart))
     return psEmit(p5, xi_label(lEnd))
@@ -1077,16 +1080,18 @@ mapper parseForIn(ps: PS) -> PS {
     let pcmp = psEmitCmp(pstart, "slt", iSlot, lenSlot)              // i < len
     let pbrz = psEmit(pcmp, xi_brz(pcmp.resultTemp, lEnd))
     let pload = psEmit(pbrz, xi_aloadn(xSlot, arrBase, iSlot, ew))   // x = data[i] (ew slots)
-    let pbody = parseBlock(pload)
+    let lCont = pload.nextLabel                                      // continue lands on the increment
+    let pbody = parseBlock(withNextLabel(pload, pload.nextLabel + 1), lEnd, lCont)  // break -> exit
     if not pbody.ok { return pbody }
-    let pinc = psEmitBin(psEmitConst(pbody, 1), "add", iSlot, pbody.nextSlot)   // i = i + 1
+    let pcont = psEmit(pbody, xi_label(lCont))
+    let pinc = psEmitBin(psEmitConst(pcont, 1), "add", iSlot, pcont.nextSlot)   // i = i + 1
     let pstore = psEmit(pinc, xi_copy(iSlot, pinc.resultTemp))
     return psEmit(psEmit(pstore, xi_br(lStart)), xi_label(lEnd))
 }
 
 // match <sum-expr> { Variant [binding] -> { body } ... } — a tag test per arm,
 // binding the payload before running the arm, lowered to a compare/branch chain.
-mapper parseMatch(ps: PS) -> PS {
+mapper parseMatch(ps: PS, brk: Integer, cont: Integer) -> PS {
     let subj = parseExpr(psAdvance(ps))                // consume 'match', parse the subject
     if not subj.ok { return subj }
     if subj.resultKind < 3 { return psFail(subj) }
@@ -1115,7 +1120,7 @@ mapper parseMatch(ps: PS) -> PS {
         let pbound = pbrz
         if string_len(bindName) > 0 and payTi >= 0 { pbound = bindLocal(pbrz, bindName, tagSlot + 1, 3 + payTi) }
         if psKind(pbound) != 102 { return psFail(pbound) }        // require a { block } body
-        let pbody = parseBlock(pbound)
+        let pbody = parseBlock(pbound, brk, cont)
         if not pbody.ok { return pbody }
         cur = psEmit(psEmit(pbody, xi_br(lend)), xi_label(lnext))
         if psKind(cur) == 106 { cur = psAdvance(cur) }            // optional ','
@@ -1124,14 +1129,22 @@ mapper parseMatch(ps: PS) -> PS {
     return psEmit(psAdvance(cur), xi_label(lend))
 }
 
-mapper parseStmt(ps: PS) -> PS {
+mapper parseStmt(ps: PS, brk: Integer, cont: Integer) -> PS {
     let k = psKind(ps)
     if k == 220 { return parseLet(ps) }
     if k == 221 { return parseReturn(ps) }
-    if k == 222 { return parseIf(ps) }
-    if k == 247 { return parseWhile(ps) }
+    if k == 222 { return parseIf(ps, brk, cont) }
+    if k == 247 { return parseWhile(ps) }                          // a loop resets break/continue scope
     if k == 246 { return parseForIn(ps) }                          // for x in <array> { ... }
-    if k == 224 { return parseMatch(ps) }                          // match <sum> { ... }
+    if k == 224 { return parseMatch(ps, brk, cont) }               // match <sum> { ... }
+    if k == 249 {                                                  // break -> loop exit
+        if brk < 0 { return psFail(ps) }
+        return psEmit(psAdvance(ps), xi_br(brk))
+    }
+    if k == 250 {                                                  // continue -> loop back-edge
+        if cont < 0 { return psFail(ps) }
+        return psEmit(psAdvance(ps), xi_br(cont))
+    }
     if k == 238 { return parseDotStmt(ps) }                        // this.field = v  or  this.method(...)
     if k == 1 {
         let p1 = psAdvance(ps)
@@ -1186,7 +1199,7 @@ mapper parseDotStmt(ps: PS) -> PS {
 mapper parseStmts(ps: PS) -> PS {
     let cur = ps
     while psKind(cur) != 0 {
-        cur = parseStmt(cur)
+        cur = parseStmt(cur, 0 - 1, 0 - 1)             // top level: no enclosing loop
         if not cur.ok { return cur }
     }
     return cur
