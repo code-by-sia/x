@@ -999,12 +999,20 @@ xc_integer_t xstd_mem_rss(void) {
 
 xc_integer_t xstd_mem_peak(void) {
     struct rusage ru;
-    if (getrusage(RUSAGE_SELF, &ru) != 0) return 0;
+    xc_integer_t peak = 0;
+    if (getrusage(RUSAGE_SELF, &ru) == 0) {
 #if defined(__APPLE__)
-    return (xc_integer_t)ru.ru_maxrss;              /* bytes on macOS */
+        peak = (xc_integer_t)ru.ru_maxrss;          /* bytes on macOS */
 #else
-    return (xc_integer_t)ru.ru_maxrss * 1024;       /* kilobytes on Linux */
+        peak = (xc_integer_t)ru.ru_maxrss * 1024;   /* kilobytes on Linux */
 #endif
+    }
+    /* Peak and current RSS come from different accounting sources (getrusage's
+       high-water mark vs. /proc/self/statm on Linux), rounded differently, so the
+       reported peak can read just under the current sample. The peak is at least
+       the current RSS by definition — clamp so peakRss() >= rss() always holds. */
+    xc_integer_t cur = xstd_mem_rss();
+    return peak >= cur ? peak : cur;
 }
 
 /* CPU time consumed by this process, in milliseconds (user and system). Read
