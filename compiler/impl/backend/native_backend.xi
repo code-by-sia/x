@@ -569,6 +569,22 @@ mapper parseCall(ps: PS, rawName: String) -> PS {
 // primary := INT | STRING | IDENT | call | '(' expr ')'
 mapper parsePrimary(ps: PS) -> PS {
     let k = psKind(ps)
+    if k == 227 or k == 126 {                      // logical not: `not x` / `!x` -> (x == 0)
+        let r = parsePrimary(psAdvance(ps))
+        if not r.ok { return r }
+        let z = psEmitConst(r, 0)
+        return psEmitCmp(z, "eq", r.resultTemp, z.resultTemp)
+    }
+    if k == 119 {                                  // unary minus: -x -> 0 - x (float-aware)
+        let r = parsePrimary(psAdvance(ps))
+        if not r.ok { return r }
+        if r.resultKind == numKind() {
+            let zf = psEmitFConst(r, "0.0")
+            return psEmitFBin(zf, "fsub", zf.resultTemp, r.resultTemp)
+        }
+        let z = psEmitConst(r, 0)
+        return psEmitBin(z, "sub", z.resultTemp, r.resultTemp)
+    }
     if k == 2 { return psEmitConst(psAdvance(ps), digitsToInt(psText(ps))) }
     if k == 3 { return psEmitFConst(psAdvance(ps), psText(ps)) }   // float literal -> Number
     if k == 236 { return psEmitConst(psAdvance(ps), 1) }           // true
@@ -835,8 +851,8 @@ mapper parseAdd(ps: PS) -> PS {
     return cur
 }
 
-// expr := add ((cmp) add)?    (a single, non-associative comparison)
-mapper parseExpr(ps: PS) -> PS {
+// cmp := add ((cmp) add)?    (a single, non-associative comparison)
+mapper parseCmp(ps: PS) -> PS {
     let cur = parseAdd(ps)
     if not cur.ok { return cur }
     let op = cmpOpOf(psKind(cur))
@@ -867,6 +883,50 @@ mapper parseExpr(ps: PS) -> PS {
             return ec
         }
         return psEmitCmp(rhs, op, left, rhs.resultTemp)
+    }
+    return cur
+}
+
+// and := cmp ('and' cmp)*   — short-circuit like the C backend's `&&`: if the
+// left is false (0) the result is 0 and the right side is never evaluated (so a
+// guard such as `i + 1 < n and s.charAt(i + 1) == c` stays in bounds).
+mapper parseAnd(ps: PS) -> PS {
+    let cur = parseCmp(ps)
+    if not cur.ok { return cur }
+    while psKind(cur) == 225 {
+        let la = cur.resultTemp
+        let rps = psEmitConst(cur, 0)                          // result slot, default false
+        let r = rps.resultTemp
+        let lend = rps.nextLabel
+        let p = psEmit(withNextLabel(rps, lend + 1), xi_brz(la, lend))   // left false -> keep 0
+        let rhs = parseCmp(psAdvance(p))                       // consume 'and', evaluate right
+        if not rhs.ok { return rhs }
+        let p2 = psEmit(rhs, xi_brz(rhs.resultTemp, lend))     // right false -> keep 0
+        let p3 = psEmit(psEmit(p2, xi_const(r, 1)), xi_label(lend))      // both true -> 1
+        cur = psKindResult(p3, r, 0)
+    }
+    return cur
+}
+
+// expr := and ('or' and)*   — short-circuit like the C backend's `||`: if the
+// left is true the result is 1 and the right side is never evaluated.
+mapper parseExpr(ps: PS) -> PS {
+    let cur = parseAnd(ps)
+    if not cur.ok { return cur }
+    while psKind(cur) == 226 {
+        let la = cur.resultTemp
+        let rps = psEmitConst(cur, 1)                          // result slot, default true
+        let r = rps.resultTemp
+        let lcheck = rps.nextLabel
+        let lend = lcheck + 1
+        let p = psEmit(withNextLabel(rps, lend + 1), xi_brz(la, lcheck))   // left false -> check right
+        let p1 = psEmit(psEmit(p, xi_br(lend)), xi_label(lcheck))         // left true -> keep 1
+        let p1b = psEmit(p1, xi_const(r, 0))                              // assume right false
+        let rhs = parseAnd(psAdvance(p1b))                                // consume 'or', evaluate right
+        if not rhs.ok { return rhs }
+        let p2 = psEmit(rhs, xi_brz(rhs.resultTemp, lend))               // right false -> keep 0
+        let p3 = psEmit(psEmit(p2, xi_const(r, 1)), xi_label(lend))      // right true -> 1
+        cur = psKindResult(p3, r, 0)
     }
     return cur
 }

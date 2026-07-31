@@ -41,6 +41,7 @@ The native backend is being built in stages behind the flag, with the C backend 
 - generic interfaces: a parametric `interface Box<T>` is monomorphized (before either backend runs) into a distinct concrete interface per instantiation, so `Box<Integer>` and `Box<String>` are separate interfaces with separate implementors and return types; an unbound dependency auto-wires to the single class implementing its instantiation;
 - sum types and `match`: a `type T = | A { ... } | B | ...` value is laid out inline as a tag word plus the widest variant's payload; a variant is constructed by name (`A { f: v }` or a nullary `B`), passed by value, and deconstructed with `match`, which tests the tag and binds the payload in each arm;
 - `Number` (IEEE-754 double) arithmetic and comparison: a literal is materialized into a stack slot, `+ - * /` are the hardware double instructions over the FP registers, and `== != < <= > >=` lower to `fcmp`; an `Integer` operand mixed with a `Number` is promoted with `scvtf` (so `2.0 + 3` and `3 < 4.5` work); `Number` parameters, returns, arguments, and fields all travel in `d`-registers per the calling convention, in a register bank separate from the integer arguments (so `f(a: Integer, x: Number, b: Integer)` puts `a`/`b` in `x`-registers and `x` in a `d`-register);
+- boolean operators `and` / `or` / `not` and unary minus: `and` and `or` short-circuit exactly like the C backend (the right operand is skipped when the left already decides the result, so a guard such as `i + 1 < n and s.charAt(i + 1) == c` never reads out of bounds), `not x` is `(x == 0)`, and `-x` negates an `Integer` or a `Number`. Precedence follows the C backend: `or` binds loosest, then `and`, then comparisons, then `+ -`, then `* / %`, with unary `not` / `-` binding tightest;
 - expressions over integer literals, parameters, locals, `+ - * / %`, comparisons (`== != < <= > >=`), and parentheses.
 
 Locals and parameters get dedicated stack slots (stable across loop iterations); expression temps get fresh slots; branches are resolved in a second pass, and calls follow the AArch64 convention (args in `x0`..`x7`, result in `x0`, `fp`/`lr` saved). The backend lays the functions out and patches every `BL` itself. Anything outside the subset (a string, a non-integer function, an unsupported operator) is reported and refused rather than mis-compiled:
@@ -97,6 +98,7 @@ Supporting a new arch_os is therefore additive: write an `InsnEncoder` for the i
 | Generic interfaces (monomorphized, auto-wired) | done |
 | Sum types and `match` (tag + payload, variant patterns) | done |
 | `Number` (double) arithmetic, comparison, parameters, returns, fields | done |
+| Boolean `and` / `or` (short-circuit), `not`, and unary minus | done |
 | Full language coverage, diffed against the C backend | planned |
 | Self-host: compile the compiler with the native backend | planned |
 | Second target (Linux ELF, x86-64) | planned |

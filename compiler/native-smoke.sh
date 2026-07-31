@@ -251,6 +251,13 @@ XC_OUT="$W" "$XC" --backend native "$W/sd.xi" >/dev/null 2>&1
 sdout=$("$W/sd" 2>/dev/null)
 if [ "$sdout" = "42" ]; then echo "  ✓ state defaults: n=5 + m=37 -> 42"; else echo "  ✗ state defaults printed \"$sdout\""; fail=1; fi
 
+# Boolean operators (and / or / not, short-circuit) and unary minus. The `and`
+# guard must not evaluate charAt out of range, and `-x` must negate.
+printf 'extern "C" { producer xstd_put_int(n: Integer)  mapper xstd_str_char_at(s: String, i: Integer) -> Integer }\nmodule M { entry main(args: String[]) -> Integer { let s = "hi"  let g = 0  if string_len(s) > 5 and xstd_str_char_at(s, 9) == 1 { g = 1 }  xstd_put_int(g)  let ok = true  let bad = false  if ok and not bad and (3 < 4 or 9 < 0) { xstd_put_int(7) } else { xstd_put_int(0) }  xstd_put_int(-8 + 20)  return 0 } }\n' > "$W/bl.xi"
+XC_OUT="$W" "$XC" --backend native "$W/bl.xi" >/dev/null 2>&1
+blout=$("$W/bl" 2>/dev/null | tr '\n' ' ')
+if [ "$blout" = "0 7 12 " ]; then echo "  ✓ boolean/unary: short-circuit and->0, and/or/not->7, -8+20->12"; else echo "  ✗ boolean/unary printed \"$blout\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1
