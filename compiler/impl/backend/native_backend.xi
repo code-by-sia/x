@@ -1263,6 +1263,20 @@ mapper parseNativeParams(pstr: String) -> ParamParse {
     return ParamParse { ok: true, names: names, kinds: kinds }
 }
 
+// Does the body mention `name` as an identifier? Used to marshal the entry's
+// argv only when `main` actually reads its args parameter (so an entry that
+// ignores args carries no argv setup).
+predicate bodyUsesName(toks: Token[], name: String) {
+    let i = 0
+    let n = tokenArrLen(toks)
+    while i < n {
+        let t = tokenArrGet(toks, i)
+        if t.kind == 1 and t.text == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
 mapper dummyFn() -> XFunc {
     let b0: XBlock[] = []
     let e0: Integer[] = []
@@ -1284,6 +1298,29 @@ mapper lowerFunc(name: String, paramStr: String, retC: String, bodyTokens: Token
     let nslots = 0
     let nxreg = 0
     let ndreg = 0
+    let entryArgsName = ""            // set when the entry marshals argv into a String[]
+    if isEntry {
+        // The loader hands the entry argc in x0 and argv in x1. If `main` declares
+        // a single String[] parameter, spill those two as hidden Integer params and
+        // marshal them into the array with a runtime call; otherwise ignore them.
+        let ep = parseNativeParams(paramStr)
+        if ep.ok and stringArrLen(ep.names) == 1 and intArrGet(ep.kinds, 0) == strArrKind() and bodyUsesName(bodyTokens, stringArrGet(ep.names, 0)) {
+            names0 = appendString(names0, "__argc")   // slot 0 <- x0
+            slots0 = appendInt(slots0, 0)
+            kinds0 = appendInt(kinds0, 0)
+            pkinds = appendInt(pkinds, 1)
+            names0 = appendString(names0, "__argv")   // slot 1 <- x1
+            slots0 = appendInt(slots0, 1)
+            kinds0 = appendInt(kinds0, 0)
+            pkinds = appendInt(pkinds, 1)
+            names0 = appendString(names0, stringArrGet(ep.names, 0))   // args at slots 2,3,4
+            slots0 = appendInt(slots0, 2)
+            kinds0 = appendInt(kinds0, strArrKind())
+            nslots = 5
+            nxreg = 2
+            entryArgsName = stringArrGet(ep.names, 0)
+        }
+    }
     if not isEntry {
         let pp = parseNativeParams(paramStr)
         if not pp.ok { return FuncLower { ok: false, fn: dummyFn() } }
@@ -1315,7 +1352,14 @@ mapper lowerFunc(name: String, paramStr: String, retC: String, bodyTokens: Token
         if nxreg > 8 or ndreg > 8 { return FuncLower { ok: false, fn: dummyFn() } }
     }
     let insns0: XInsn[] = []
-    let ps = parseStmts(PS { toks: bodyTokens, pos: 0, insns: insns0, nextSlot: nslots, resultTemp: 0, ok: true, names: names0, slots: slots0, nextLabel: 0, lastRet: false, kinds: kinds0, resultKind: 0 })
+    let ps0 = PS { toks: bodyTokens, pos: 0, insns: insns0, nextSlot: nslots, resultTemp: 0, ok: true, names: names0, slots: slots0, nextLabel: 0, lastRet: false, kinds: kinds0, resultKind: 0 }
+    if string_len(entryArgsName) > 0 {           // args = xstd_args(argc, argv) -> slots 2,3,4
+        let aa: Integer[] = []
+        aa = appendInt(aa, 0)
+        aa = appendInt(aa, 1)
+        ps0 = psEmitCallF(ps0, "xstd_args", aa, zeroFlags(2), 2, strArrKind())
+    }
+    let ps = parseStmts(ps0)
     if not ps.ok { return FuncLower { ok: false, fn: dummyFn() } }
     if not ps.lastRet { return FuncLower { ok: false, fn: dummyFn() } }
     let blocks0: XBlock[] = []
@@ -1544,6 +1588,7 @@ producer registerSigs(prog: Program) {
     fnsig_add("xstd_str_char_at", 0)
     fnsig_add("xstd_str_slice", 1)
     fnsig_add("xstd_str_eq", 0)
+    fnsig_add("xstd_args", strArrKind())      // argv marshalled into a String[] (x8 return)
     for f in prog.functions { fnsig_add(f.name, retKindOfCtype(f.retCtype)) }
     for x in prog.externs { fnsig_add(x.name, retKindOfCtype(x.retCtype)) }
     for c in prog.classes {
@@ -1558,7 +1603,7 @@ producer lowerProgram(prog: Program) -> LowerResult {
     registerSigs(prog)
     let funcs0: XFunc[] = []
     let funcs = funcs0
-    let lm = lowerFunc("main", "", prog.entrySpec.retCtype, prog.entrySpec.bodyTokens, true)
+    let lm = lowerFunc("main", prog.entrySpec.params, prog.entrySpec.retCtype, prog.entrySpec.bodyTokens, true)
     if not lm.ok { return unsupportedLower() }
     funcs = appendXFunc(funcs, lm.fn)
     for f in prog.functions {
@@ -1598,6 +1643,7 @@ producer compileNative(diag: Diagnostics, host: Host, enc: InsnEncoder, obj: Obj
     externNames = appendString(externNames, "xstd_str_char_at")
     externNames = appendString(externNames, "xstd_str_slice")
     externNames = appendString(externNames, "xstd_str_eq")
+    externNames = appendString(externNames, "xstd_args")     // argv -> String[] for the entry
     for x in prog.externs { externNames = appendString(externNames, x.name) }
     let lk = linkModule(EncodedModule { funcs: efs, entry: m.entry }, externNames)
     if not lk.ok {

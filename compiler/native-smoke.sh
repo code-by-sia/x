@@ -265,6 +265,12 @@ XC_OUT="$W" "$XC" --backend native "$W/lc.xi" >/dev/null 2>&1
 lcout=$("$W/lc" 2>/dev/null | tr '\n' ' ')
 if [ "$lcout" = "10 7 " ]; then echo "  ✓ loop control: while+break->10, for+continue->7"; else echo "  ✗ loop control printed \"$lcout\""; fail=1; fi
 
+# Command-line args: the entry's String[] parameter, marshalled from argv.
+printf 'extern "C" { producer xstd_put_int(n: Integer)  producer xstd_put_str(s: String) }\nmodule M { entry main(args: String[]) -> Integer { xstd_put_int(args.len)  let i = 1  while i < args.len { xstd_put_str(args.data[i])  xstd_put_str(" ")  i = i + 1 }  return 0 } }\n' > "$W/ar.xi"
+XC_OUT="$W" "$XC" --backend native "$W/ar.xi" >/dev/null 2>&1
+arout=$("$W/ar" alpha beta 2>/dev/null | tr '\n' ' ')
+if [ "$arout" = "3 alpha beta " ]; then echo "  ✓ args: argv marshalled to String[] (len 3, argv[1..2])"; else echo "  ✗ args printed \"$arout\""; fail=1; fi
+
 # Unsupported program: must fail and leave no binary.
 printf 'import "std/io.xi"\nmodule M { id = "px"\n entry main(args: String[]) -> Integer { io.println("x") return 0 } }\n' > "$W/px.xi"
 XC_OUT="$W" "$XC" --backend native "$W/px.xi" >/dev/null 2>&1

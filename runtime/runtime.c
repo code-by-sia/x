@@ -1055,6 +1055,19 @@ xc_arr_integer_t xstd_iappend(xc_arr_integer_t a, xc_integer_t v) {
 }
 xc_string_t  xstd_str_slice(xc_string_t s, xc_integer_t a, xc_integer_t b) { return string_slice(s, a, b); }
 xc_integer_t xstd_alloc(xc_integer_t n) { return (xc_integer_t)(intptr_t)calloc(1, (size_t)n); }
+/* Marshal the process command line into a String[] for the native backend's
+ * `entry main(args: String[])`. argc/argv arrive in x0/x1 from the loader; the
+ * result comes back through x8, the same { data, len, cap } shape the C backend
+ * builds inline. Matches xc_string_from_cstr per element, so both backends see
+ * the identical args value. */
+xc_arr_string_t xstd_args(xc_integer_t argc, char** argv) {
+    xc_arr_string_t r;
+    r.len = (xc_size_t)argc;
+    r.cap = (xc_size_t)argc;
+    r.data = (xc_string_t*)malloc((argc > 0 ? (size_t)argc : 1) * sizeof(xc_string_t));
+    for (xc_integer_t i = 0; i < argc; i++) r.data[i] = xc_string_from_cstr(argv[i]);
+    return r;
+}
 /* Native-backend singleton cache: instance pointers by index (0 = not built). */
 static void* xw_singletons[8192];
 xc_integer_t xstd_singleton_get(xc_integer_t i) { return (xc_integer_t)(intptr_t)xw_singletons[(size_t)i]; }
