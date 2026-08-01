@@ -86,6 +86,26 @@ console), or run the `.js` under Node. Requires `emcc` on your `PATH`
 `--target native` to be explicit. See [WebAssembly](wasm.md) for what runs in
 the browser sandbox and what doesn't.
 
+### Native backend - `xc --backend native`
+
+By default `xc` builds through C99 and a C compiler. `--backend native` (or
+`XC_BACKEND=native`) instead emits machine code and writes the executable
+itself, so the build needs no `cc` and no `ld`:
+
+```console
+$ xc --backend native examples/native/exit_code.xi
+$ ./build/exit_code ; echo $?
+42
+```
+
+This backend is being built in stages and currently compiles integer functions
+(`main` plus integer-typed top-level functions) using `let`, assignment,
+`return`, `if`/`else`, `while`, calls, and integer arithmetic and comparisons;
+anything else is reported and refused rather than mis-compiled. The C backend
+stays the default. See
+[Native backend](native-backend.md) for scope, the toolchain-free design, and
+the roadmap.
+
 ### Dependencies - `xi install`
 
 A module can list third-party libraries as `dependencies` (URLs to `.tar.gz` /

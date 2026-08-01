@@ -999,12 +999,20 @@ xc_integer_t xstd_mem_rss(void) {
 
 xc_integer_t xstd_mem_peak(void) {
     struct rusage ru;
-    if (getrusage(RUSAGE_SELF, &ru) != 0) return 0;
+    xc_integer_t peak = 0;
+    if (getrusage(RUSAGE_SELF, &ru) == 0) {
 #if defined(__APPLE__)
-    return (xc_integer_t)ru.ru_maxrss;              /* bytes on macOS */
+        peak = (xc_integer_t)ru.ru_maxrss;          /* bytes on macOS */
 #else
-    return (xc_integer_t)ru.ru_maxrss * 1024;       /* kilobytes on Linux */
+        peak = (xc_integer_t)ru.ru_maxrss * 1024;   /* kilobytes on Linux */
 #endif
+    }
+    /* Peak and current RSS come from different accounting sources (getrusage's
+       high-water mark vs. /proc/self/statm on Linux), rounded differently, so the
+       reported peak can read just under the current sample. The peak is at least
+       the current RSS by definition — clamp so peakRss() >= rss() always holds. */
+    xc_integer_t cur = xstd_mem_rss();
+    return peak >= cur ? peak : cur;
 }
 
 /* CPU time consumed by this process, in milliseconds (user and system). Read
@@ -1026,6 +1034,44 @@ xc_integer_t xstd_uptime_ms(void) {
     return now - xw_started_ms;
 }
 void         xstd_mark_start(void)      { xw_started_ms = xstd_now_nanos() / 1000000; }
+void         xstd_put_int(xc_integer_t n) { printf("%lld\n", (long long)n); }
+void         xstd_put_num(xc_number_t x) { printf("%g\n", (double)x); }
+void         xstd_put_str(xc_string_t s) { fwrite(s.data, 1, s.len, stdout); }
+xc_string_t  xstd_concat(xc_string_t a, xc_string_t b) { return xc_string_concat(a, b); }
+/* String operations as linkable symbols for the native backend (the runtime.h
+ * helpers are static inline, so they carry no symbol to bind against). */
+xc_integer_t xstd_str_eq(xc_string_t a, xc_string_t b) { return xc_string_eq(a, b) ? 1 : 0; }
+xc_integer_t xstd_str_char_at(xc_string_t s, xc_integer_t i) { return string_char_at(s, i); }
+/* Grow an Integer[] by one, returning the (possibly reallocated) array. Exercises
+ * the AAPCS by-value struct argument and x8 indirect result from the native backend. */
+xc_arr_integer_t xstd_iappend(xc_arr_integer_t a, xc_integer_t v) {
+    if (a.len < a.cap) { a.data[a.len] = v; a.len += 1; return a; }
+    xc_size_t nc = a.cap ? a.cap * 2 : 4;
+    xc_integer_t* nd = (xc_integer_t*)malloc(nc * sizeof(xc_integer_t));
+    if (a.len) memcpy(nd, a.data, a.len * sizeof(xc_integer_t));
+    nd[a.len] = v;
+    xc_arr_integer_t out; out.data = nd; out.len = a.len + 1; out.cap = nc;
+    return out;
+}
+xc_string_t  xstd_str_slice(xc_string_t s, xc_integer_t a, xc_integer_t b) { return string_slice(s, a, b); }
+xc_integer_t xstd_alloc(xc_integer_t n) { return (xc_integer_t)(intptr_t)calloc(1, (size_t)n); }
+/* Marshal the process command line into a String[] for the native backend's
+ * `entry main(args: String[])`. argc/argv arrive in x0/x1 from the loader; the
+ * result comes back through x8, the same { data, len, cap } shape the C backend
+ * builds inline. Matches xc_string_from_cstr per element, so both backends see
+ * the identical args value. */
+xc_arr_string_t xstd_args(xc_integer_t argc, char** argv) {
+    xc_arr_string_t r;
+    r.len = (xc_size_t)argc;
+    r.cap = (xc_size_t)argc;
+    r.data = (xc_string_t*)malloc((argc > 0 ? (size_t)argc : 1) * sizeof(xc_string_t));
+    for (xc_integer_t i = 0; i < argc; i++) r.data[i] = xc_string_from_cstr(argv[i]);
+    return r;
+}
+/* Native-backend singleton cache: instance pointers by index (0 = not built). */
+static void* xw_singletons[8192];
+xc_integer_t xstd_singleton_get(xc_integer_t i) { return (xc_integer_t)(intptr_t)xw_singletons[(size_t)i]; }
+void         xstd_singleton_set(xc_integer_t i, xc_integer_t p) { xw_singletons[(size_t)i] = (void*)(intptr_t)p; }
 xc_integer_t xstd_request_count(void)   { return xw_request_count; }
 
 xc_integer_t xstd_now_nanos(void) {

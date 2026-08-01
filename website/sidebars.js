@@ -51,7 +51,7 @@ const sidebars = {
     {
       type: 'category',
       label: 'Interop & targets',
-      items: ['ffi', 'wasm'],
+      items: ['ffi', 'wasm', 'native-backend'],
     },
     {
       type: 'category',

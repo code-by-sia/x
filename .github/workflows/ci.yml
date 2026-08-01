@@ -43,7 +43,10 @@ jobs:
         run: |
           set -euo pipefail
           export XC_RUNTIME="$PWD/runtime"
-          for f in $(find examples -name '*.xi' -not -path 'examples/showcase/*' | sort) examples/showcase/main.xi; do
+          # examples/native/* are native-backend demos (native-only idioms like
+          # `.data[i]`, `xstd_*` externs); they are exercised via --backend native
+          # on macOS below, not through the C backend here.
+          for f in $(find examples -name '*.xi' -not -path 'examples/showcase/*' -not -path 'examples/native/*' | sort) examples/showcase/main.xi; do
             echo "== $f =="
             case "$(basename "$f")" in
               # *_test.xi files have no entry — they run via `xi test` below.
@@ -57,6 +60,17 @@ jobs:
               web_demo.xi|web_store_demo.xi|web_params_demo.xi|web_capture_demo.xi|web_route_capture_demo.xi|web_route_move_demo.xi|scheduled_demo.xi|scheduled_every_demo.xi) echo "  (long-running example — compile-only)" ;;
               *) if [ -x "$bin" ]; then "$bin" | head -3 || true; fi ;;
             esac
+          done
+
+      - name: Native backend (macOS/arm64 — xc --backend native)
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          export XC="$PWD/compiler/xc" XC_RUNTIME="$PWD/runtime"
+          ./compiler/native-smoke.sh
+          for f in examples/native/*.xi; do
+            echo "== native $f =="
+            ./compiler/xc --backend native "$f" >/dev/null
           done
 
       - name: Run unit tests (xi test)
