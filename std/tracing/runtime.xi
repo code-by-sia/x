@@ -27,6 +27,15 @@ class DefaultTracer implements Tracer {
     predicate isEnabled() -> Bool => this.on
     projector spanCount() -> Integer => this.total
 
+    projector currentTraceId() -> String {
+        if this.active.len() > 0 { return this.active.get(this.active.len() - 1).context.traceId }
+        return ""
+    }
+    projector currentSpanId() -> String {
+        if this.active.len() > 0 { return this.active.get(this.active.len() - 1).context.spanId }
+        return ""
+    }
+
     producer start(name: String, kind: SpanKind) -> Span {
         let traceId = ""
         let parentId = ""

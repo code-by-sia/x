@@ -17,6 +17,8 @@ interface Tracer {
     consumer  end(span: Span)                                         // finish and hand to the exporter
     consumer  flush()                                                // force export of buffered spans
     projector spanCount() -> Integer                                 // spans finished this process
+    projector currentTraceId() -> String                             // the active span's trace id, or "" if none
+    projector currentSpanId() -> String                              // the active span's id, or "" if none
 }
 
 // Receives finished spans. Adapters: console, in-memory, OTLP over HTTP.
