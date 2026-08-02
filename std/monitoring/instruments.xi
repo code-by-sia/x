@@ -9,11 +9,6 @@
 import "std/monitoring.xi"
 import "std/json.xi"
 
-// One instrument, stored in a flat list (a Map cannot yet be class state). kind:
-// 0 counter, 1 up-down, 2 gauge, 3 histogram. value holds the counter/gauge
-// number; count/sum/lo/hi hold the histogram aggregate.
-type Instrument = { name: String, kind: Integer, value: Integer, count: Integer, sum: Integer, lo: Integer, hi: Integer }
-
 interface Meter {
     consumer  counterAdd(name: String, n: Integer)          // monotonic total += n
     consumer  upDownAdd(name: String, n: Integer)           // may increase or decrease
@@ -31,114 +26,49 @@ interface Meter {
 
 class DefaultMeter implements Meter {
     deps {}
-    state { items: List<Instrument> = empty List<Instrument> }
+    state { counters: Map<String, Integer> = empty Map<String, Integer>, updowns: Map<String, Integer> = empty Map<String, Integer>, gauges: Map<String, Integer> = empty Map<String, Integer>, hCount: Map<String, Integer> = empty Map<String, Integer>, hSum: Map<String, Integer> = empty Map<String, Integer>, hMin: Map<String, Integer> = empty Map<String, Integer>, hMax: Map<String, Integer> = empty Map<String, Integer> }
 
-    // Index of the (name, kind) instrument, or -1.
-    mapper find(name: String, kind: Integer) -> Integer {
-        let i = 0
-        while i < this.items.len() {
-            let it = this.items.get(i)
-            if it.kind == kind and it.name == name { return i }
-            i = i + 1
-        }
-        return 0 - 1
-    }
-
-    // Add to a counter-like instrument (counter or up-down), creating it if new.
-    consumer accumulate(name: String, kind: Integer, n: Integer) {
-        let i = find(name, kind)
-        if i >= 0 {
-            let it = this.items.get(i)
-            this.items.set(i, Instrument { name: name, kind: kind, value: it.value + n, count: 0, sum: 0, lo: 0, hi: 0 })
-        } else {
-            this.items.push(Instrument { name: name, kind: kind, value: n, count: 0, sum: 0, lo: 0, hi: 0 })
-        }
-    }
-
-    consumer counterAdd(name: String, n: Integer) { accumulate(name, 0, n) }
-    consumer upDownAdd(name: String, n: Integer)  { accumulate(name, 1, n) }
-
-    consumer gaugeSet(name: String, n: Integer) {
-        let i = find(name, 2)
-        if i >= 0 {
-            this.items.set(i, Instrument { name: name, kind: 2, value: n, count: 0, sum: 0, lo: 0, hi: 0 })
-        } else {
-            this.items.push(Instrument { name: name, kind: 2, value: n, count: 0, sum: 0, lo: 0, hi: 0 })
-        }
-    }
-
+    consumer counterAdd(name: String, n: Integer) { this.counters.put(name, this.counters.getOr(name, 0) + n) }
+    consumer upDownAdd(name: String, n: Integer)  { this.updowns.put(name, this.updowns.getOr(name, 0) + n) }
+    consumer gaugeSet(name: String, n: Integer)   { this.gauges.put(name, n) }
     consumer histogramRecord(name: String, n: Integer) {
-        let i = find(name, 3)
-        if i >= 0 {
-            let it = this.items.get(i)
-            let lo = it.lo
-            let hi = it.hi
-            if n < lo { lo = n }
-            if n > hi { hi = n }
-            this.items.set(i, Instrument { name: name, kind: 3, value: 0, count: it.count + 1, sum: it.sum + n, lo: lo, hi: hi })
-        } else {
-            this.items.push(Instrument { name: name, kind: 3, value: 0, count: 1, sum: n, lo: n, hi: n })
-        }
+        this.hCount.put(name, this.hCount.getOr(name, 0) + 1)
+        this.hSum.put(name, this.hSum.getOr(name, 0) + n)
+        if not this.hMin.has(name) or n < this.hMin.get(name) { this.hMin.put(name, n) }
+        if not this.hMax.has(name) or n > this.hMax.get(name) { this.hMax.put(name, n) }
     }
 
-    projector valueOf(name: String, kind: Integer) -> Integer {
-        let i = find(name, kind)
-        if i >= 0 { return this.items.get(i).value }
-        return 0
-    }
-    projector counterValue(name: String) -> Integer => valueOf(name, 0)
-    projector upDownValue(name: String) -> Integer   => valueOf(name, 1)
-    projector gaugeValue(name: String) -> Integer    => valueOf(name, 2)
-
-    projector histogramCount(name: String) -> Integer {
-        let i = find(name, 3)
-        if i >= 0 { return this.items.get(i).count }
-        return 0
-    }
-    projector histogramSum(name: String) -> Integer {
-        let i = find(name, 3)
-        if i >= 0 { return this.items.get(i).sum }
-        return 0
-    }
-    projector histogramMin(name: String) -> Integer {
-        let i = find(name, 3)
-        if i >= 0 { return this.items.get(i).lo }
-        return 0
-    }
-    projector histogramMax(name: String) -> Integer {
-        let i = find(name, 3)
-        if i >= 0 { return this.items.get(i).hi }
-        return 0
-    }
+    projector counterValue(name: String) -> Integer   => this.counters.getOr(name, 0)
+    projector upDownValue(name: String) -> Integer     => this.updowns.getOr(name, 0)
+    projector gaugeValue(name: String) -> Integer      => this.gauges.getOr(name, 0)
+    projector histogramCount(name: String) -> Integer  => this.hCount.getOr(name, 0)
+    projector histogramSum(name: String) -> Integer    => this.hSum.getOr(name, 0)
+    projector histogramMin(name: String) -> Integer    => this.hMin.getOr(name, 0)
+    projector histogramMax(name: String) -> Integer    => this.hMax.getOr(name, 0)
 
     producer snapshot() -> Json {
-        let counters = json.object()
-        let updowns  = json.object()
-        let gauges   = json.object()
-        let hists    = json.object()
-        let i = 0
-        while i < this.items.len() {
-            let it = this.items.get(i)
-            if it.kind == 0 { counters = json.set(counters, it.name, json.int(it.value)) }
-            else if it.kind == 1 { updowns = json.set(updowns, it.name, json.int(it.value)) }
-            else if it.kind == 2 { gauges = json.set(gauges, it.name, json.int(it.value)) }
-            else {
-                let ho = json.object()
-                ho = json.set(ho, "count", json.int(it.count))
-                ho = json.set(ho, "sum", json.int(it.sum))
-                ho = json.set(ho, "min", json.int(it.lo))
-                ho = json.set(ho, "max", json.int(it.hi))
-                hists = json.set(hists, it.name, ho)
-            }
-            i = i + 1
-        }
         let o = json.object()
-        o = json.set(o, "counters", counters)
-        o = json.set(o, "upDownCounters", updowns)
-        o = json.set(o, "gauges", gauges)
-        o = json.set(o, "histograms", hists)
+        o = json.set(o, "counters", mapToJson(this.counters))
+        o = json.set(o, "upDownCounters", mapToJson(this.updowns))
+        o = json.set(o, "gauges", mapToJson(this.gauges))
+        let h = json.object()
+        for k in this.hCount.keys() {
+            let ho = json.object()
+            ho = json.set(ho, "count", json.int(this.hCount.getOr(k, 0)))
+            ho = json.set(ho, "sum", json.int(this.hSum.getOr(k, 0)))
+            ho = json.set(ho, "min", json.int(this.hMin.getOr(k, 0)))
+            ho = json.set(ho, "max", json.int(this.hMax.getOr(k, 0)))
+            h = json.set(h, k, ho)
+        }
+        o = json.set(o, "histograms", h)
         return o
     }
+}
+
+producer mapToJson(m: Map<String, Integer>) -> Json {
+    let o = json.object()
+    for k in m.keys() { o = json.set(o, k, json.int(m.getOr(k, 0))) }
+    return o
 }
 
 // Surface the meter's numbers in the std/monitoring report under "metrics".

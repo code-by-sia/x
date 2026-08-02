@@ -597,8 +597,10 @@ mapper parseClass(ps: PState) -> ClassResult {
                 if it.kind == 0 { coll = false }
                 else { if depth == 0 and (it.kind == 106 or it.kind == 103) { coll = false }
                 else {
-                    if it.kind == 100 or it.kind == 104 or it.kind == 102 { depth = depth + 1 }
-                    if it.kind == 101 or it.kind == 105 or it.kind == 103 { depth = depth - 1 }
+                    // Track (), [], {} and <> so a comma inside a generic default
+                    // (e.g. `= empty Map<String, Integer>`) does not end the field.
+                    if it.kind == 100 or it.kind == 104 or it.kind == 102 or it.kind == 114 { depth = depth + 1 }
+                    if it.kind == 101 or it.kind == 105 or it.kind == 103 or it.kind == 115 { depth = depth - 1 }
                     stateInit = appendToken(stateInit, it)
                     ps2 = advance(ps2)
                 } }
