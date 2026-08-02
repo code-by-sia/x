@@ -1,7 +1,7 @@
 # std/tracing: OpenTelemetry-compatible distributed tracing
 
-**Status: Stage 1 (tracing core) implemented; propagation, OTLP, sampling
-config, and the monitoring/web bridges are staged follow-ups.**
+**Status: Stages 1-2 implemented (tracing core + W3C propagation); OTLP,
+sampling config, and the monitoring/web bridges are staged follow-ups.**
 
 `std/tracing` gives an Xi program the tracing signal of OpenTelemetry: spans with
 a trace/span identity, parent-child nesting, attributes, events, status, a
