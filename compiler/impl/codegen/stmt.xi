@@ -44,8 +44,26 @@ mapper genIf(toks: Token[], pos: Integer, ctx: GCtx) -> StmtRes {
         if e.xtyp.startsWith2("opt_") { nmType = string_slice(e.xtyp, 4, string_len(e.xtyp)).xnameFromArrSuffix() }
         let bctx = ctx.addSym(nm, nmType)
         let body = "        __auto_type " + nm + " = (" + e.code + ").value;\n" + genStmts(toks, pe + 1, close, bctx)
-        let code = "    if ((" + e.code + ").has_value) {\n" + body + "    }\n"
-        return StmtRes { code: code, ctx: ctx, pos: close + 1 }
+        let code = "    if ((" + e.code + ").has_value) {\n" + body + "    }"
+        // The bound name is in scope only in the then-branch; the else-branch (if
+        // any) runs in the outer ctx. Without this, a trailing `else { … }` was
+        // parsed as a stray statement and ran unconditionally.
+        let np = close + 1
+        if toks.kindAt(np) == 223 {                                  // else
+            if toks.kindAt(np + 1) == 222 {                          // else if
+                let inner = genIf(toks, np + 1, ctx)
+                code = code + " else " + inner.code
+                np = inner.pos
+            } else {
+                let eclose = toks.matchBrace(np + 1)
+                let ebody = genStmts(toks, np + 2, eclose, ctx)
+                code = code + " else {\n" + ebody + "    }\n"
+                np = eclose + 1
+            }
+        } else {
+            code = code + "\n"
+        }
+        return StmtRes { code: code, ctx: ctx, pos: np }
     }
     let c = genExpr(toks, p, ctx)
     let pc = c.pos

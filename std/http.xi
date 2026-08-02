@@ -97,6 +97,14 @@ mapper header(resp: Response, name: String) -> String {
 
 // Send one request and read the full response (uses Connection: close).
 producer request(method: String, url: String, body: String, contentType: String) -> Response! {
+    let noHeaders: String[] = []
+    return requestWith(method, url, body, contentType, noHeaders)
+}
+
+// Like request, but with extra request headers (each a "Name: Value" string, no
+// CRLF). Use it to carry a traceparent for distributed tracing, an auth token,
+// and so on.
+producer requestWith(method: String, url: String, body: String, contentType: String, extraHeaders: String[]) -> Response! {
     let ur = parseUrl(url)
     if isErr(ur) { return err(ur.err) }
     let u = ur.value
@@ -105,12 +113,22 @@ producer request(method: String, url: String, body: String, contentType: String)
             + "Host: " + u.host + "\r\n"
             + "User-Agent: x-http/0.1\r\n"
             + "Connection: close\r\n"
+    let h = 0
+    while h < extraHeaders.len {
+        req = req + extraHeaders.data[h] + "\r\n"
+        h = h + 1
+    }
     if text.length(body) > 0 {
         req = req + "Content-Type: " + contentType + "\r\n"
                   + "Content-Length: " + text.length(body) + "\r\n"
     }
     req = req + "\r\n" + body
 
+    return sendHttp(u, req)
+}
+
+// Shared transport: write the raw request and parse the raw response.
+producer sendHttp(u: Url, req: String) -> Response! {
     let raw = ""
     if u.tls {
         // HTTPS: the runtime does the TLS round-trip in one call.
