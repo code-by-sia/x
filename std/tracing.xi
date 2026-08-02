@@ -21,6 +21,7 @@
 // See docs/tracing.md for the full design.
 import "std/tracing/model.xi"
 import "std/tracing/ports.xi"
+import "std/tracing/config.xi"
 import "std/tracing/encode.xi"
 import "std/tracing/ids.xi"
 import "std/tracing/sampler.xi"
