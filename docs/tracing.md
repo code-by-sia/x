@@ -1,8 +1,10 @@
 # std/tracing: OpenTelemetry-compatible distributed tracing
 
-**Status: Stages 1-3 implemented (tracing core + W3C propagation + OTLP/HTTP
-exporter with typed config); the ratio sampler and the monitoring/web bridges
-are the remaining follow-ups.**
+**Status: all stages implemented.** Tracing core, W3C propagation, the OTLP/HTTP
+exporter with typed config, ratio/off samplers, the monitoring bridge and web
+server-span helper, trace-correlated logging, and the metric instruments (under
+`std/monitoring/instruments.xi`) are all in place, each with tests and, where it
+runs, an example. Every mechanic is a bindable interface.
 
 `std/tracing` gives an Xi program the tracing signal of OpenTelemetry: spans with
 a trace/span identity, parent-child nesting, attributes, events, status, a
