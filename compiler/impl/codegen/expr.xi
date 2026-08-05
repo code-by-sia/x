@@ -166,6 +166,67 @@ mapper hoistLambdas(prog: Program, toks: Token[], tag: String) -> String {
 }
 
 // ── primary ───────────────────────────────────────────────────────
+// Reverse of ctypeSuffix (parser/type_parser.xi): a container-name suffix back to
+// its C base type, so `empty <collection-alias>` can rebuild the constructor.
+mapper suffixToCtype(suf: String) -> String {
+    if suf == "number" { return "xc_number_t" }
+    if suf == "integer" { return "xc_integer_t" }
+    if suf == "bool" { return "xc_bool_t" }
+    if suf == "string" { return "xc_string_t" }
+    if suf == "char" { return "xc_char_t" }
+    if suf == "size" { return "xc_size_t" }
+    if suf == "timestamp" { return "xc_timestamp_t" }
+    return "xc_" + suf + "_t"
+}
+
+// Length of the (single-word) map-key suffix at the front of `mid`, or -1.
+mapper mapKeySuffixLen(mid: String) -> Integer {
+    if mid.startsWith2("string_") { return 6 }
+    if mid.startsWith2("integer_") { return 7 }
+    if mid.startsWith2("number_") { return 6 }
+    if mid.startsWith2("bool_") { return 4 }
+    if mid.startsWith2("char_") { return 4 }
+    if mid.startsWith2("size_") { return 4 }
+    if mid.startsWith2("timestamp_") { return 9 }
+    return 0 - 1
+}
+
+// The runtime constructor for a collection base ctype (xc_Map_*/xc_List_*/…), or
+// "" when `base` is not a collection. Mirrors the `empty Map<...>` / `empty
+// List<...>` codegen so an alias of a collection builds a real value rather than
+// a zeroed struct that crashes on first use.
+mapper collectionCtor(base: String) -> String {
+    if base.startsWith2("xc_Map_") {
+        let mid = string_slice(base, 7, string_len(base) - 2)
+        let klen = mapKeySuffixLen(mid)
+        if klen < 0 { return "" }
+        let kc = suffixToCtype(string_slice(mid, 0, klen))
+        let vc = suffixToCtype(string_slice(mid, klen + 1, string_len(mid)))
+        return "xstd_map_new(sizeof(" + kc + "), sizeof(" + vc + "), " + kc.strFlagFor() + ")"
+    }
+    if base.startsWith2("xc_List_") {
+        let ec = suffixToCtype(string_slice(base, 8, string_len(base) - 2))
+        return "xstd_list_new(sizeof(" + ec + "))"
+    }
+    if base.startsWith2("xc_Set_") {
+        let ec = suffixToCtype(string_slice(base, 7, string_len(base) - 2))
+        return "xstd_set_new(sizeof(" + ec + "), " + ec.strFlagFor() + ")"
+    }
+    if base.startsWith2("xc_Stack_") {
+        let ec = suffixToCtype(string_slice(base, 9, string_len(base) - 2))
+        return "xstd_stack_new(sizeof(" + ec + "))"
+    }
+    if base.startsWith2("xc_Queue_") {
+        let ec = suffixToCtype(string_slice(base, 9, string_len(base) - 2))
+        return "xstd_queue_new(sizeof(" + ec + "))"
+    }
+    if base.startsWith2("xc_SortedQueue_") {
+        let ec = suffixToCtype(string_slice(base, 15, string_len(base) - 2))
+        return "xstd_pqueue_new(sizeof(" + ec + "), " + ec.pqCmpKind() + ")"
+    }
+    return ""
+}
+
 mapper genPrimary(toks: Token[], pos: Integer, ctx: GCtx) -> ExprRes {
     let k = toks.kindAt(pos)
     let txt = toks.textAt(pos)
@@ -410,6 +471,17 @@ mapper genPrimary(toks: Token[], pos: Integer, ctx: GCtx) -> ExprRes {
                 else { if pk == 126 { tp = tp + 1 }                            // !
                 else { if pk == 104 and toks.kindAt(tp + 1) == 105 { tp = tp + 2 }  // []
                 else { cont = false } } }
+            }
+            // A bare `empty <alias>` where the alias targets a collection: build
+            // the real constructor, not a zeroed struct that crashes on first use.
+            if nk == 1 and tp == pos + 2 {
+                let ts = findTypeSpec(ctx.prog, toks.textAt(pos + 1))
+                if string_len(ts.name) > 0 and not ts.isCompound and not ts.isSum {
+                    let ctor = collectionCtor(ts.baseCtype)
+                    if string_len(ctor) > 0 {
+                        return ExprRes { code: ctor, pos: tp, xtyp: string_slice(ts.baseCtype, 3, string_len(ts.baseCtype) - 2) , owned: false }
+                    }
+                }
             }
             return ExprRes { code: "(" + ctype + "){0}", pos: tp, xtyp: toks.textAt(pos + 1) , owned: false }
         }
