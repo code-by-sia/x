@@ -104,7 +104,7 @@ module Compile {
     id           = "xc"
     name         = "Xi Compiler"
     description  = "The Xi language compiler — Xi source to C99 to native binaries."
-    version      = "0.1.13"
+    version      = "0.1.14"
     license      = "Apache 2.0"
     includes     = []
     excludes     = []
