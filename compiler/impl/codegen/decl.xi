@@ -5,9 +5,24 @@
 // An alias whose target is an array/optional type (e.g. `type People = Person[]`).
 // These reference xc_arr_*/xc_opt_* and so must be emitted AFTER those typedefs
 // (see genAliasTypedefs); they are skipped by the array/opt/result/refined passes.
+// True if the C base type is a container monomorphization (array, or a
+// collection alias like xc_Map_*/xc_List_*). Such aliases must be emitted after
+// genArrTypedefs, which defines those underlying typedefs.
+predicate isCollectionCtype(b: String) {
+    return b.startsWith2("xc_arr_")
+        or b.startsWith2("xc_Map_")
+        or b.startsWith2("xc_List_")
+        or b.startsWith2("xc_Set_")
+        or b.startsWith2("xc_Stack_")
+        or b.startsWith2("xc_Queue_")
+        or b.startsWith2("xc_SortedQueue_")
+        or b.startsWith2("xc_Future_")
+        or b.startsWith2("xc_Query_")
+}
+
 predicate isCompositeAlias(ts: TypeSpec) {
     if ts.isCompound { return false }
-    return ts.baseCtype.startsWith2("xc_arr_")
+    return isCollectionCtype(ts.baseCtype)
 }
 
 mapper genRefinedTypedefs(prog: Program) -> String {
